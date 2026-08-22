@@ -91,12 +91,21 @@ android {
             storePassword 'xrj45yWGLbsO7W0v'
             keyPassword 'xrj45yWGLbsO7W0v'
         }
+        release {
+            // Use the same testkey for CI release builds.
+            // For production, replace with a real keystore via env vars or secrets.
+            storeFile file('testkey_untrusted.jks')
+            keyAlias 'alias'
+            storePassword 'xrj45yWGLbsO7W0v'
+            keyPassword 'xrj45yWGLbsO7W0v'
+        }
     }
 
     buildTypes {
         release {
             minifyEnabled true
             shrinkResources false // Reproducible builds
+            signingConfig signingConfigs.release
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
         }
 

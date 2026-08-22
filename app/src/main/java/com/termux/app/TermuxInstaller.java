@@ -454,9 +454,8 @@ final class TermuxInstaller {
                     Context context = activity.getApplicationContext();
                     File filesDir = context.getFilesDir();
 
-                    // Extract proot binary
-                    extractAsset(context, TERMBOX_PROOT_DIR + "/proot",
-                        new File(filesDir, "usr/bin/proot"));
+                    // Note: proot binary is already provided by the Termux bootstrap packages.
+                    // No need to extract it separately.
 
                     // Extract Box64 binary
                     extractAsset(context, TERMBOX_BOX64_DIR + "/box64",
@@ -484,7 +483,7 @@ final class TermuxInstaller {
                     installTermBoxShellScripts(context, filesDir);
 
                     // Set executable permissions on binaries
-                    setExecutable(new File(filesDir, "usr/bin/proot"));
+                    // Note: proot permissions are already set by the Termux bootstrap.
                     setExecutable(new File(filesDir, "usr/bin/box64"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-ubuntu"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-host"));

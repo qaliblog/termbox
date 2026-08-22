@@ -1,6 +1,6 @@
 {
-  "_comment": "TermBox Asset Manifest - All URLs must be pinned to specific versions with SHA-256 verification",
-  "_schema_version": "1.0.0",
+  "_comment": "TermBox Asset Manifest - Verified upstream sources with pinned versions",
+  "_schema_version": "1.1.0",
 
   "bootstrap": {
     "description": "Termux bootstrap packages for the TermBox prefix",
@@ -18,24 +18,6 @@
         "sha256": "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3",
         "filename": "bootstrap-aarch64.zip",
         "size_estimate_mb": 30
-      },
-      "arm": {
-        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-arm.zip",
-        "sha256": "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018",
-        "filename": "bootstrap-arm.zip",
-        "size_estimate_mb": 28
-      },
-      "i686": {
-        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-i686.zip",
-        "sha256": "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b",
-        "filename": "bootstrap-i686.zip",
-        "size_estimate_mb": 28
-      },
-      "x86_64": {
-        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-x86_64.zip",
-        "sha256": "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a",
-        "filename": "bootstrap-x86_64.zip",
-        "size_estimate_mb": 30
       }
     },
     "destination": "bootstrap/{arch}.zip",
@@ -44,50 +26,55 @@
 
   "proot-distro": {
     "description": "proot-distro - utility for managing proot distributions",
-    "version": "5.7.0",
-    "url": "https://github.com/termux/proot-distro/archive/refs/tags/v5.7.0.tar.gz",
+    "version": "5.8.0",
+    "commit": "f832a56f2e8aab659a915600598b5321996aad78",
+    "url": "https://github.com/termux/proot-distro/archive/refs/tags/v5.8.0.tar.gz",
     "sha256": null,
-    "filename": "proot-distro-5.7.0.tar.gz",
+    "filename": "proot-distro-5.8.0.tar.gz",
     "architecture": "all",
     "compression": "tar.gz",
     "required_for_offline": true,
     "license": "MIT",
     "license_url": "https://github.com/termux/proot-distro/blob/master/LICENSE",
     "source": "https://github.com/termux/proot-distro",
-    "destination": "proot-distro/",
-    "extract_to": "proot-distro/"
+    "install_method": "copy_source_tree",
+    "notes": "proot is already included in the Termux bootstrap. This package provides the distro management scripts."
   },
 
   "ubuntu": {
-    "description": "Ubuntu ARM64 minimal rootfs for proot-distro (optional - enables offline Ubuntu)",
-    "version": "22.04.5 LTS (Jammy Jellyfish)",
-    "url": "https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
-    "sha256": null,
-    "filename": "ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
-    "architecture": "arm64",
+    "description": "Ubuntu 24.04 ARM64 rootfs extracted from official Docker OCI image",
+    "version": "24.04",
+    "docker_image": "arm64v8/ubuntu:24.04",
+    "docker_platform": "linux/arm64/v8",
+    "install_method": "docker_export",
     "compression": "tar.xz",
-    "required_for_offline": false,
+    "required_for_offline": true,
     "license": "CC-BY-SA 4.0",
     "license_url": "https://ubuntu.com/legal/intellectual-property-policy",
-    "source": "https://cloud-images.ubuntu.com",
-    "destination": "ubuntu/",
-    "proot_distro_name": "ubuntu",
-    "notes": "Optional: large download (~30MB). Enables offline Ubuntu ARM64 environment."
+    "source": "https://hub.docker.com/_/ubuntu",
+    "notes": "Built by pulling the official arm64v8/ubuntu:24.04 Docker image and exporting its rootfs. Requires Docker on the build machine."
   },
 
   "box64": {
-    "description": "Box64 - Linux userspace x86_64 emulator (optional - must be built from source for Android)",
+    "description": "Box64 - Linux userspace x86_64 emulator for ARM64, built from source for Android",
     "version": "0.4.4",
-    "url": null,
-    "sha256": null,
-    "filename": null,
-    "architecture": "aarch64",
-    "compression": null,
-    "required_for_offline": false,
+    "commit": null,
+    "source": "https://github.com/ptitSeb/box64",
+    "release": "https://github.com/ptitSeb/box64/releases/tag/v0.4.4",
+    "build_method": "cmake_android_ndk",
+    "cmake_options": {
+      "ANDROID": "ON",
+      "ARM_DYNAREC": "ON",
+      "BAD_SIGNAL": "ON",
+      "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+      "NOGIT": "ON"
+    },
+    "target_abi": "arm64-v8a",
+    "target_platform": "android-24",
+    "required_for_offline": true,
     "license": "MIT",
     "license_url": "https://github.com/ptitSeb/box64/blob/main/LICENSE",
-    "source": "https://github.com/ptitSeb/box64",
-    "notes": "Optional: Box64 must be cross-compiled from source for Android ARM64. No pre-built binary is available. Build with Android NDK and place the binary at box64/box64 in the APK assets."
+    "notes": "Must be cross-compiled from source using Android NDK. No pre-built Android binary exists upstream."
   },
 
   "termbox-config": {

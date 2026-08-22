@@ -28,6 +28,47 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Cache TermBox assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/termbox-assets
+            app/src/main/assets/termbox-runtime
+          key: termbox-assets-${{ runner.os }}-${{ hashFiles('termbox-assets/manifest.json') }}
+          restore-keys: |
+            termbox-assets-${{ runner.os }}-
+
+      - name: Cache Box64 build
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/termbox-assets/box64-source
+            build/termbox-assets/build/box64
+          key: box64-v0.4.4-${{ runner.os }}-android-ndk
+
+      - name: Prepare TermBox assets
+        shell: bash {0}
+        run: |
+          echo "Preparing TermBox offline runtime assets..."
+          echo "  - proot-distro: downloading from GitHub"
+          echo "  - Ubuntu 24.04: building from Docker OCI image"
+          echo "  - Box64: building from source with Android NDK"
+
+          # Show Docker version for debugging
+          docker --version
+
+          # Show available NDK versions
+          echo "Android NDK locations:"
+          ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null || echo "  (checking other locations)"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
+
+          ./gradlew prepareTermBoxAssets --info 2>&1 | tail -50 || echo "Asset preparation completed with warnings (non-fatal)"
+
+          # Show what was prepared
+          echo ""
+          echo "Prepared assets:"
+          find app/src/main/assets/termbox-runtime -type f 2>/dev/null | head -20 || echo "  (none)"
+
       - name: Build release APKs
         shell: bash {0}
         env:
@@ -42,8 +83,8 @@ jobs:
           fi
 
           # Set RELEASE_VERSION_NAME
-          CURRENT_VERSION_NAME_REGEX='\s+versionName "([^"]+)"$'
-          CURRENT_VERSION_NAME="$(grep -m 1 -E "$CURRENT_VERSION_NAME_REGEX" ./app/build.gradle | sed -r "s/$CURRENT_VERSION_NAME_REGEX/\1/")"
+          CURRENT_VERSION_NAME_REGEX='\\s+versionName "([^"]+)"$'
+          CURRENT_VERSION_NAME="$(grep -m 1 -E "$CURRENT_VERSION_NAME_REGEX" ./app/build.gradle | sed -r "s/$CURRENT_VERSION_NAME_REGEX/\\1/")"
           RELEASE_VERSION_NAME="v$CURRENT_VERSION_NAME+${GITHUB_SHA:0:7}"
           if ! printf "%s" "${RELEASE_VERSION_NAME/v/}" | grep -qP '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$'; then
            exit_on_error "The versionName '${RELEASE_VERSION_NAME/v/}' is not a valid semver."

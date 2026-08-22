@@ -1,18 +1,24 @@
 /**
  * TermBox Asset Preparation Build Script
  *
- * This script defines Gradle tasks for downloading, verifying, and preparing
- * all runtime assets required for the TermBox offline APK.
+ * Downloads, builds, and prepares all runtime assets for the TermBox offline APK.
+ *
+ * Assets:
+ *   - Bootstrap: Termux bootstrap packages (already built by downloadBootstraps in :app)
+ *   - proot-distro: Termux proot-distro scripts
+ *   - Ubuntu 24.04 ARM64: Extracted from official Docker OCI image
+ *   - Box64: Built from source using Android NDK cross-compilation
  *
  * Tasks:
- *   prepareTermBoxAssets - Download and prepare all assets for the APK
+ *   prepareTermBoxAssets - Download/build and prepare all assets for the APK
  *   cleanTermBoxAssets   - Remove downloaded and prepared assets
+ *   termboxBuildSummary  - Print build status summary
  *
  * Usage:
- *   ./gradlew prepareTermBoxAssets              # Download and prepare assets
- *   ./gradlew assembleRelease                   # Build APK (auto-runs prepareTermBoxAssets)
- *   ./gradlew assembleRelease -PtermboxOffline=true  # Build APK without network access
- *   ./gradlew cleanTermBoxAssets                # Clear asset cache
+ *   ./gradlew prepareTermBoxAssets
+ *   ./gradlew assembleRelease (auto-runs prepareTermBoxAssets if assets exist)
+ *   ./gradlew assembleRelease -PtermboxOffline=true
+ *   ./gradlew cleanTermBoxAssets
  */
 
 apply plugin: 'base'
@@ -30,10 +36,14 @@ ext {
     termboxCacheDir = new File(project.rootDir, 'build/termbox-assets')
     termboxDownloadsDir = new File(termboxCacheDir, 'downloads')
     termboxExtractedDir = new File(termboxCacheDir, 'extracted')
+    termboxBuildDir = new File(termboxCacheDir, 'build')
     termboxManifestDir = new File(termboxCacheDir, 'manifest')
 
     // APK asset destination (inside app module)
-    termboxApkAssetsDir = new File(project(':app').projectDir, 'src/main/assets/termbox-runtime')
+    termboxApkAssetsDir = new File(project.rootDir, 'app/src/main/assets/termbox-runtime')
+
+    // Box64 source cache
+    termboxBox64SourceDir = new File(termboxCacheDir, 'box64-source')
 }
 
 /**
@@ -52,17 +62,12 @@ def calculateSha256(File file) {
 }
 
 /**
- * Download a file with SHA-256 verification and idempotent caching
+ * Download a file with optional SHA-256 verification and idempotent caching
  */
 def downloadAsset(String name, String url, String expectedSha256, File destFile, boolean offline) {
     // Check if file already exists and is valid
-    if (destFile.exists()) {
-        if (expectedSha256 != null && expectedSha256.startsWith("PLACEHOLDER")) {
-            logger.quiet("  [${name}] Skipping SHA-256 check (placeholder hash)")
-            logger.quiet("  [${name}] Using existing file: ${destFile.name} (${destFile.length()} bytes)")
-            return true
-        }
-        if (expectedSha256 != null) {
+    if (destFile.exists() && destFile.length() > 0) {
+        if (expectedSha256 != null && !expectedSha256.isEmpty() && !expectedSha256.startsWith("PLACEHOLDER")) {
             def actualSha256 = calculateSha256(destFile)
             if (actualSha256 == expectedSha256) {
                 logger.quiet("  [${name}] Asset already cached and verified: ${destFile.name}")
@@ -79,29 +84,11 @@ def downloadAsset(String name, String url, String expectedSha256, File destFile,
 
     // Check offline mode
     if (offline) {
-        def errorMsg = """
-TermBox asset missing: ${name}
-
-The required build asset was not found in the local cache and could
-not be downloaded (offline mode is enabled).
-
-To build offline, place the correct asset in:
-    ${destFile.parentFile.absolutePath}/${destFile.name}
-
-Expected SHA-256: ${expectedSha256 ?: 'N/A'}
-Expected URL: ${url}
-
-To download this asset, run a build without -PtermboxOffline=true first.
-"""
-        throw new GradleException(errorMsg)
+        throw new GradleException("TermBox asset '${name}' missing and offline mode is enabled. " +
+            "Place the asset at: ${destFile.absolutePath}")
     }
 
     // Download
-    if (url == null) {
-        logger.quiet("  [${name}] No URL provided, skipping download (local asset)")
-        return true
-    }
-
     logger.quiet("  [${name}] Downloading from: ${url}")
     destFile.parentFile.mkdirs()
 
@@ -111,10 +98,10 @@ To download this asset, run a build without -PtermboxOffline=true first.
         def connection = new URL(url).openConnection()
         connection.setInstanceFollowRedirects(true)
         connection.setConnectTimeout(30000)
-        connection.setReadTimeout(60000)
+        connection.setReadTimeout(120000)
 
         def out = new BufferedOutputStream(new FileOutputStream(partFile))
-        if (expectedSha256 != null && !expectedSha256.startsWith("PLACEHOLDER")) {
+        if (expectedSha256 != null && !expectedSha256.isEmpty() && !expectedSha256.startsWith("PLACEHOLDER")) {
             def digest = MessageDigest.getInstance("SHA-256")
             def digestStream = new DigestInputStream(connection.inputStream, digest)
             out << digestStream
@@ -135,7 +122,7 @@ To download this asset, run a build without -PtermboxOffline=true first.
         // Rename .part to final file (atomic)
         if (destFile.exists()) destFile.delete()
         partFile.renameTo(destFile)
-        logger.quiet("  [${name}] Downloaded and verified: ${destFile.name} (${destFile.length()} bytes)")
+        logger.quiet("  [${name}] Downloaded: ${destFile.name} (${destFile.length()} bytes)")
         return true
 
     } catch (Exception e) {
@@ -145,10 +132,27 @@ To download this asset, run a build without -PtermboxOffline=true first.
 }
 
 /**
+ * Execute a command and return success/failure
+ */
+def execCommand(String description, String... command) {
+    logger.quiet("  [exec] ${description}")
+    def process = command.execute()
+    def stdout = new StringBuilder()
+    def stderr = new StringBuilder()
+    process.consumeProcessOutput(stdout, stderr)
+    process.waitFor()
+    if (process.exitValue() != 0) {
+        logger.quiet("  [exec] Failed (exit code ${process.exitValue()}): ${stderr.toString().trim()}")
+        return false
+    }
+    return true
+}
+
+/**
  * Create the prepareTermBoxAssets task
  */
 task prepareTermBoxAssets {
-    description = 'Downloads and prepares all TermBox runtime assets for offline APK packaging'
+    description = 'Downloads, builds, and prepares all TermBox runtime assets for offline APK packaging'
     group = 'TermBox'
 
     doLast {
@@ -166,124 +170,241 @@ task prepareTermBoxAssets {
         // Ensure directories exist
         termboxDownloadsDir.mkdirs()
         termboxExtractedDir.mkdirs()
+        termboxBuildDir.mkdirs()
         termboxManifestDir.mkdirs()
         termboxApkAssetsDir.mkdirs()
 
-        def downloaded = 0
-        def cached = 0
+        def assetsReady = 0
         def warnings = []
 
-        // Helper: download an asset if it has a URL, skip gracefully otherwise
-        def tryDownloadAsset = { String name, String url, String sha256, File destFile ->
-            if (url == null || url.isEmpty()) {
-                logger.quiet("  [${name}] No URL configured - skipping (optional asset)")
-                return false
-            }
-            if (sha256 == null || sha256.isEmpty() || sha256.startsWith('PLACEHOLDER')) {
-                logger.warn("  [${name}] No SHA-256 configured - downloading without verification")
-            }
-            try {
-                downloadAsset(name, url, sha256, destFile, termboxOffline)
-                return true
-            } catch (Exception e) {
-                logger.warn("  [${name}] Download failed (non-fatal): ${e.message}")
-                warnings << "${name}: ${e.message}"
-                return false
-            }
-        }
-
-        // --- 1. Download/verify Bootstrap ---
-        logger.quiet("\n--- Preparing Bootstrap ---")
-        def bootstrap = manifest.bootstrap
-        def arch = 'aarch64'
-        def bootstrapInfo = bootstrap?.variants?.get(arch)
-        if (bootstrapInfo) {
-            def destFile = new File(termboxDownloadsDir, bootstrapInfo.filename)
-            if (tryDownloadAsset("bootstrap-${arch}", bootstrapInfo.url, bootstrapInfo.sha256, destFile)) {
-                def apkDest = new File(termboxApkAssetsDir, "bootstrap/${arch}.zip")
-                apkDest.parentFile.mkdirs()
-                if (!apkDest.exists() || apkDest.length() != destFile.length()) {
-                    java.nio.file.Files.copy(destFile.toPath(), apkDest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                }
-                cached++
-            }
-        }
-
-        // Note: PRoot is included in the Termux bootstrap archive.
-        // No separate proot download is needed.
-
-        // --- 2. Download/verify proot-distro ---
+        // ========================================
+        // 1. PROOT-DISTRO
+        // ========================================
         logger.quiet("\n--- Preparing proot-distro ---")
         def prootDistro = manifest.'proot-distro'
-        if (prootDistro?.url) {
+        try {
             def prootDistroFile = new File(termboxDownloadsDir, prootDistro.filename)
-            if (tryDownloadAsset("proot-distro", prootDistro.url, prootDistro.sha256, prootDistroFile)) {
-                if (prootDistroFile.exists()) {
-                    def prootDistroExtractDir = new File(termboxExtractedDir, 'proot-distro')
-                    prootDistroExtractDir.mkdirs()
-                    try {
-                        "tar -xzf ${prootDistroFile.absolutePath} -C ${prootDistroExtractDir.absolutePath} --strip-components=1".execute().waitFor()
-                        def apkPdDir = new File(termboxApkAssetsDir, "proot-distro")
-                        apkPdDir.mkdirs()
-                        "cp -r ${prootDistroExtractDir.absolutePath}/. ${apkPdDir.absolutePath}/".execute().waitFor()
-                        logger.quiet("  [proot-distro] Extracted to APK assets")
-                    } catch (Exception e) {
-                        logger.warn("  [proot-distro] Extraction failed (non-fatal): ${e.message}")
+            if (downloadAsset("proot-distro", prootDistro.url, prootDistro.sha256, prootDistroFile, termboxOffline)) {
+                // Extract proot-distro source tree
+                def extractDir = new File(termboxExtractedDir, 'proot-distro')
+                if (!extractDir.exists()) {
+                    extractDir.mkdirs()
+                    def cmd = "tar -xzf ${prootDistroFile.absolutePath} -C ${extractDir.absolutePath} --strip-components=1"
+                    if (!execCommand("Extract proot-distro", "sh", "-c", cmd)) {
+                        throw new GradleException("Failed to extract proot-distro")
                     }
                 }
-                cached++
+                // Copy to APK assets
+                def apkPdDir = new File(termboxApkAssetsDir, "proot-distro")
+                apkPdDir.mkdirs()
+                execCommand("Copy proot-distro to APK assets",
+                    "sh", "-c", "cp -r ${extractDir.absolutePath}/. ${apkPdDir.absolutePath}/")
+                logger.quiet("  [proot-distro] READY (v${prootDistro.version})")
+                assetsReady++
             }
-        } else {
-            logger.quiet("  [proot-distro] No URL configured - skipping")
+        } catch (Exception e) {
+            logger.warn("  [proot-distro] Warning: ${e.message}")
+            warnings << "proot-distro: ${e.message}"
         }
 
-        // --- 3. Download/verify Ubuntu rootfs (optional) ---
-        logger.quiet("\n--- Preparing Ubuntu Rootfs (optional) ---")
+        // ========================================
+        // 2. UBUNTU ARM64 ROOTFS (via Docker)
+        // ========================================
+        logger.quiet("\n--- Preparing Ubuntu 24.04 ARM64 Rootfs ---")
         def ubuntu = manifest.ubuntu
-        if (ubuntu?.url) {
-            def ubuntuFile = new File(termboxDownloadsDir, ubuntu.filename)
-            if (tryDownloadAsset("ubuntu-rootfs", ubuntu.url, ubuntu.sha256, ubuntuFile)) {
-                if (ubuntuFile.exists()) {
-                    def apkUbuntu = new File(termboxApkAssetsDir, "ubuntu/${ubuntu.filename}")
-                    apkUbuntu.parentFile.mkdirs()
-                    if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuFile.length()) {
-                        java.nio.file.Files.copy(ubuntuFile.toPath(), apkUbuntu.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    }
+        def ubuntuTar = new File(termboxDownloadsDir, "ubuntu-24.04-arm64.tar.xz")
+
+        try {
+            if (ubuntuTar.exists() && ubuntuTar.length() > 0) {
+                logger.quiet("  [ubuntu] Using cached rootfs: ${ubuntuTar.name} (${ubuntuTar.length()} bytes)")
+            } else if (termboxOffline) {
+                throw new GradleException("Ubuntu rootfs missing and offline mode enabled")
+            } else {
+                // Check if Docker is available
+                def dockerCheck = "which docker".execute()
+                dockerCheck.waitFor()
+                if (dockerCheck.exitValue() != 0) {
+                    throw new GradleException("Docker is required to build Ubuntu rootfs. Install Docker or place the rootfs at: ${ubuntuTar.absolutePath}")
                 }
-                cached++
+
+                def dockerImage = ubuntu.docker_image
+                def dockerPlatform = ubuntu.docker_platform
+
+                logger.quiet("  [ubuntu] Pulling Docker image: ${dockerImage} (platform: ${dockerPlatform})")
+                if (!execCommand("Pull Ubuntu Docker image",
+                    "docker", "pull", "--platform", dockerPlatform, dockerImage)) {
+                    throw new GradleException("Failed to pull Ubuntu Docker image")
+                }
+
+                // Create a container and export its rootfs
+                logger.quiet("  [ubuntu] Exporting rootfs from Docker container...")
+                def containerName = "termbox-ubuntu-rootfs-${System.currentTimeMillis()}"
+
+                // Create container
+                if (!execCommand("Create Ubuntu container",
+                    "docker", "create", "--name", containerName, dockerImage, "/bin/true")) {
+                    throw new GradleException("Failed to create Docker container")
+                }
+
+                try {
+                    // Export rootfs as tar, then compress to tar.xz
+                    def exportCmd = "docker export ${containerName} | xz -9 > ${ubuntuTar.absolutePath}"
+                    if (!execCommand("Export and compress Ubuntu rootfs", "sh", "-c", exportCmd)) {
+                        throw new GradleException("Failed to export Ubuntu rootfs")
+                    }
+
+                    // Verify architecture
+                    logger.quiet("  [ubuntu] Verifying ARM64 architecture...")
+                    def verifyCmd = "docker run --rm --platform ${dockerPlatform} ${dockerImage} uname -m"
+                    def verifyProcess = verifyCmd.execute()
+                    def verifyOutput = new StringBuilder()
+                    verifyProcess.consumeProcessOutput(verifyOutput, new StringBuilder())
+                    verifyProcess.waitFor()
+                    def arch = verifyOutput.toString().trim()
+                    if (arch != "aarch64") {
+                        throw new GradleException("Wrong architecture! Expected aarch64, got: ${arch}")
+                    }
+                    logger.quiet("  [ubuntu] Architecture verified: ${arch}")
+                } finally {
+                    // Clean up container
+                    "docker rm -f ${containerName}".execute().waitFor()
+                }
             }
-        } else {
-            logger.quiet("  [ubuntu] No URL configured - skipping")
+
+            // Copy to APK assets
+            if (ubuntuTar.exists()) {
+                def apkUbuntu = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.xz")
+                apkUbuntu.parentFile.mkdirs()
+                if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuTar.length()) {
+                    java.nio.file.Files.copy(ubuntuTar.toPath(), apkUbuntu.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+                logger.quiet("  [ubuntu] READY (24.04 ARM64, ${ubuntuTar.length() / (1024*1024)} MB)")
+                assetsReady++
+            }
+        } catch (Exception e) {
+            logger.warn("  [ubuntu] Warning: ${e.message}")
+            warnings << "ubuntu: ${e.message}"
         }
 
-        // --- 4. Download/verify Box64 (optional - must be built from source for Android) ---
-        logger.quiet("\n--- Preparing Box64 (optional) ---")
+        // ========================================
+        // 3. BOX64 (built from source with Android NDK)
+        // ========================================
+        logger.quiet("\n--- Preparing Box64 ---")
         def box64 = manifest.box64
-        if (box64?.url) {
-            def box64File = new File(termboxDownloadsDir, box64.filename)
-            if (tryDownloadAsset("box64", box64.url, box64.sha256, box64File)) {
-                if (box64File.exists()) {
-                    def box64ExtractDir = new File(termboxExtractedDir, 'box64')
-                    box64ExtractDir.mkdirs()
-                    try {
-                        "tar -xJf ${box64File.absolutePath} -C ${box64ExtractDir.absolutePath}".execute().waitFor()
-                        def box64Bin = box64ExtractDir.listFiles()?.find { it.name == 'box64' }
-                        if (box64Bin) {
-                            def apkBox64 = new File(termboxApkAssetsDir, "box64/box64")
-                            apkBox64.parentFile.mkdirs()
-                            java.nio.file.Files.copy(box64Bin.toPath(), apkBox64.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        def box64Binary = new File(termboxApkAssetsDir, "box64/box64")
+
+        try {
+            if (box64Binary.exists() && box64Binary.length() > 0) {
+                logger.quiet("  [box64] Using existing binary: ${box64Binary.name} (${box64Binary.length()} bytes)")
+                assetsReady++
+            } else if (termboxOffline) {
+                throw new GradleException("Box64 binary missing and offline mode enabled")
+            } else {
+                // Find Android NDK
+                def ndkDir = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK")
+                if (!ndkDir) {
+                    // Try common locations
+                    def candidates = [
+                        "/usr/local/lib/android/sdk/ndk",
+                        System.getProperty("user.home") + "/Android/Sdk/ndk",
+                        "/opt/android/ndk"
+                    ]
+                    for (candidate in candidates) {
+                        def ndkBase = new File(candidate)
+                        if (ndkBase.exists()) {
+                            def versions = ndkBase.listFiles()?.sort { it.name }?.reverse()
+                            if (versions?.length > 0) {
+                                ndkDir = versions[0].absolutePath
+                                break
+                            }
                         }
-                    } catch (Exception e) {
-                        logger.warn("  [box64] Extraction failed (non-fatal): ${e.message}")
                     }
                 }
-                cached++
+                if (!ndkDir) {
+                    throw new GradleException("Android NDK not found. Set ANDROID_NDK_HOME or install the NDK.")
+                }
+
+                def toolchainFile = new File(ndkDir, "build/cmake/android.toolchain.cmake")
+                if (!toolchainFile.exists()) {
+                    throw new GradleException("Android NDK toolchain file not found at: ${toolchainFile.absolutePath}")
+                }
+                logger.quiet("  [box64] Using NDK: ${ndkDir}")
+
+                // Clone Box64 if not cached
+                if (!termboxBox64SourceDir.exists() || !new File(termboxBox64SourceDir, ".git").exists()) {
+                    logger.quiet("  [box64] Cloning Box64 v${box64.version}...")
+                    termboxBox64SourceDir.mkdirs()
+                    if (!execCommand("Clone Box64",
+                        "git", "clone", "--depth=1", "--branch", "v${box64.version}",
+                        box64.source, termboxBox64SourceDir.absolutePath)) {
+                        throw new GradleException("Failed to clone Box64")
+                    }
+                }
+
+                // Build Box64
+                def buildDir = new File(termboxBuildDir, "box64")
+                buildDir.mkdirs()
+
+                logger.quiet("  [box64] Configuring CMake for Android ARM64...")
+                def cmakeCmd = [
+                    "cmake",
+                    "${termboxBox64SourceDir.absolutePath}",
+                    "-DCMAKE_TOOLCHAIN_FILE=${toolchainFile.absolutePath}",
+                    "-DANDROID_ABI=arm64-v8a",
+                    "-DANDROID_PLATFORM=android-24",
+                    "-DTERMUX=1",
+                    "-DARM_DYNAREC=ON",
+                    "-DBAD_SIGNAL=ON",
+                    "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+                    "-DNOGIT=ON"
+                ].join(" ")
+
+                if (!execCommand("Configure Box64 CMake", "sh", "-c", "cd ${buildDir.absolutePath} && ${cmakeCmd}")) {
+                    throw new GradleException("Failed to configure Box64 CMake")
+                }
+
+                logger.quiet("  [box64] Building Box64 (this may take several minutes)...")
+                def nproc = Runtime.getRuntime().availableProcessors()
+                if (!execCommand("Build Box64", "sh", "-c",
+                    "cd ${buildDir.absolutePath} && make -j${Math.min(nproc, 4)}")) {
+                    throw new GradleException("Failed to build Box64")
+                }
+
+                // Find the built binary
+                def builtBox64 = new File(buildDir, "box64")
+                if (!builtBox64.exists()) {
+                    throw new GradleException("Box64 binary not found at: ${builtBox64.absolutePath}")
+                }
+
+                // Verify it's ARM64
+                def fileCmd = "file ${builtBox64.absolutePath}"
+                def fileProcess = fileCmd.execute()
+                def fileOutput = new StringBuilder()
+                fileProcess.consumeProcessOutput(fileOutput, new StringBuilder())
+                fileProcess.waitFor()
+                def fileType = fileOutput.toString().trim()
+                logger.quiet("  [box64] Binary type: ${fileType}")
+
+                if (!fileType.contains("ARM aarch64") && !fileType.contains("aarch64")) {
+                    throw new GradleException("Box64 binary is not ARM64! Got: ${fileType}")
+                }
+
+                // Copy to APK assets
+                box64Binary.parentFile.mkdirs()
+                java.nio.file.Files.copy(builtBox64.toPath(), box64Binary.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [box64] READY (v${box64.version}, ARM64, ${box64Binary.length()} bytes)")
+                assetsReady++
             }
-        } else {
-            logger.quiet("  [box64] No URL configured - must be built from source for Android ARM64")
+        } catch (Exception e) {
+            logger.warn("  [box64] Warning: ${e.message}")
+            warnings << "box64: ${e.message}"
         }
 
-        // --- 6. Copy TermBox config scripts ---
+        // ========================================
+        // 4. TERMBOX CONFIGURATION FILES
+        // ========================================
         logger.quiet("\n--- Copying TermBox Configuration ---")
         def configSource = new File(termboxAssetsDir, 'config')
         def configDest = new File(termboxApkAssetsDir, 'config')
@@ -298,7 +419,9 @@ task prepareTermBoxAssets {
             logger.quiet("  [config] Configuration files copied")
         }
 
-        // --- 7. Copy license file ---
+        // ========================================
+        // 5. LICENSE FILE
+        // ========================================
         def licenseSource = new File(project.rootDir, 'app/src/main/res/raw/termbox_licenses.txt')
         if (licenseSource.exists()) {
             def licenseDest = new File(termboxApkAssetsDir, 'LICENSES.txt')
@@ -307,24 +430,27 @@ task prepareTermBoxAssets {
             logger.quiet("  [licenses] License file copied")
         }
 
-        // --- 8. Write resolved manifest ---
+        // ========================================
+        // WRITE RESOLVED MANIFEST
+        // ========================================
         def resolvedManifest = [
             timestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'"),
             offline_mode: termboxOffline,
-            assets_cached: cached,
-            assets_downloaded: downloaded,
+            assets_ready: assetsReady,
             warnings: warnings,
             manifest_hash: calculateSha256(manifestFile)
         ]
         new File(termboxManifestDir, 'resolved-assets.json').text =
             new groovy.json.JsonBuilder(resolvedManifest).toPrettyString()
 
-        // --- Summary ---
+        // ========================================
+        // SUMMARY
+        // ========================================
         logger.quiet("\n========================================")
         logger.quiet("    TermBox Asset Preparation Complete")
         logger.quiet("========================================")
         logger.quiet("  Offline mode: ${termboxOffline}")
-        logger.quiet("  Assets cached: ${cached}")
+        logger.quiet("  Assets ready: ${assetsReady}")
         logger.quiet("  Warnings: ${warnings.size()}")
         if (warnings) {
             warnings.each { logger.quiet("    - ${it}") }
@@ -334,9 +460,8 @@ task prepareTermBoxAssets {
         logger.quiet("========================================\n")
 
         if (warnings && !warnings.isEmpty()) {
-            logger.warn("\n  NOTE: TermBox asset preparation completed with ${warnings.size()} warning(s).")
-            logger.warn("  The APK will build without the missing offline runtime assets.")
-            logger.warn("  To bundle offline assets, fix the issues above and re-run prepareTermBoxAssets.")
+            logger.warn("\n  NOTE: Some optional assets could not be prepared.")
+            logger.warn("  The APK will build but may be missing offline Ubuntu/Box64 support.\n")
         }
     }
 }
@@ -361,7 +486,7 @@ task cleanTermBoxAssets {
             }
         }
 
-        logger.quiet("\n  WARNING: The next build will need to download all assets again.")
+        logger.quiet("\n  WARNING: The next build will need to download/rebuild all assets.")
         logger.quiet("  If you need to build offline, do NOT clean the assets.\n")
         logger.quiet("========================================\n")
     }
@@ -376,8 +501,7 @@ task termboxBuildSummary {
 
     doLast {
         def bootstrapReady = new File(termboxApkAssetsDir, "bootstrap/aarch64.zip").exists()
-        def ubuntuReady = new File(termboxApkAssetsDir, "ubuntu/").exists() &&
-                          new File(termboxApkAssetsDir, "ubuntu/").listFiles()?.any { it.name.endsWith('.tar.xz') }
+        def ubuntuReady = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.xz").exists()
         def box64Ready = new File(termboxApkAssetsDir, "box64/box64").exists()
         def prootDistroReady = new File(termboxApkAssetsDir, "proot-distro/").exists()
 
@@ -391,20 +515,18 @@ task termboxBuildSummary {
         logger.quiet("  Target: ARM64 / AArch64\n")
         logger.quiet("Offline Runtime:")
         logger.quiet("  Bootstrap:      ${bootstrapReady ? 'READY' : 'MISSING'}")
-        logger.quiet("  proot-distro:   ${prootDistroReady ? 'READY' : 'MISSING (optional)'}")
-        logger.quiet("  Ubuntu ARM64:   ${ubuntuReady ? 'READY' : 'MISSING (optional)'}")
+        logger.quiet("  proot-distro:   ${prootDistroReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  Ubuntu 24.04:   ${ubuntuReady ? 'READY' : 'MISSING'}")
         logger.quiet("  Box64:          ${box64Ready ? 'READY' : 'MISSING (needs build from source)'}")
         logger.quiet("  x86_64 fallback: ENABLED\n")
 
         def assetsDir = termboxDownloadsDir
-        def cachedCount = assetsDir.exists() ? assetsDir.listFiles()?.length ?: 0 : 0
         def totalSize = 0L
         if (assetsDir.exists()) {
             assetsDir.listFiles()?.each { totalSize += it.length() }
         }
         logger.quiet("Assets:")
-        logger.quiet("  Cached: ${cachedCount} files")
-        logger.quiet("  Size:   ${totalSize / (1024 * 1024)} MB\n")
+        logger.quiet("  Cache size: ${totalSize / (1024 * 1024)} MB\n")
 
         def resolvedManifest = new File(termboxManifestDir, 'resolved-assets.json')
         if (resolvedManifest.exists()) {
@@ -417,7 +539,3 @@ task termboxBuildSummary {
         logger.quiet("\n========================================\n")
     }
 }
-
-// Note: The :app module wires its assemble/merge tasks to depend on
-// prepareTermBoxAssets via its own afterEvaluate block.
-// This module is standalone and does not need to reference :app tasks directly.

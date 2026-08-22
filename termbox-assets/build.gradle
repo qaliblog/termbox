@@ -342,23 +342,17 @@ task prepareTermBoxAssets {
                     }
                 }
 
-                // Exclude steam.c on Android - it uses glob()/globfree() which
-                // Android Bionic does not provide. Steam is not needed for TermBox.
-                def cmakeLists = new File(termboxBox64SourceDir, 'CMakeLists.txt')
-                if (cmakeLists.exists()) {
-                    def cmakeContent = cmakeLists.text
-                    // The upstream CMakeLists.txt includes steam.c when NOT STATICBUILD:
-                    //   if(NOT STATICBUILD)
-                    //     list(APPEND ELFLOADER_SRC ... "steam.c" ...)
-                    //   endif()
-                    // Change to: if(NOT STATICBUILD AND NOT ANDROID)
-                    if (cmakeContent.contains('"${BOX64_ROOT}/src/steam.c"') &&
-                        !cmakeContent.contains('NOT STATICBUILD AND NOT ANDROID')) {
-                        cmakeContent = cmakeContent.replace(
-                            'if(NOT STATICBUILD)',
-                            'if(NOT STATICBUILD AND NOT ANDROID)')
-                        cmakeLists.text = cmakeContent
-                        logger.quiet("  [box64] Excluded steam.c on Android (no Steam needed for TermBox)")
+                // Fix steam.c: Android NDK provides <glob.h> but steam.c
+                // doesn't include it. Add the missing include.
+                def steamC = new File(termboxBox64SourceDir, 'src/steam.c')
+                if (steamC.exists()) {
+                    def content = steamC.text
+                    if (!content.contains('#include <glob.h>')) {
+                        content = content.replace(
+                            '#include <unistd.h>',
+                            '#include <unistd.h>\n#include <glob.h>')
+                        steamC.text = content
+                        logger.quiet("  [box64] Added #include <glob.h> to src/steam.c")
                     }
                 }
 

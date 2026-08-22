@@ -1,0 +1,49 @@
+#!/bin/bash
+# termbox-shell-wrapper - Default login shell for TermBox
+#
+# This is the default shell launched by TermBox terminal sessions.
+# It automatically enters the Ubuntu ARM64 environment via proot-distro.
+#
+# Architecture:
+#   TermBox Android app
+#        ↓
+#   TerminalSession (this script as login shell)
+#        ↓
+#   proot-distro ubuntu (Ubuntu ARM64 environment)
+#        ↓
+#   Ubuntu bash shell
+#        ↓
+#   ARM64 ELF → native execution
+#   x86_64 ELF → Box64 transparent execution
+#
+# To escape back to the native TermBox host shell:
+#   termbox-host
+#
+# Copyright (c) TermBox Contributors
+# SPDX-License-Identifier: MIT
+
+# If bash was invoked with -c (command execution), just run it directly
+# This handles cases like TermBox executing scripts
+if [ "$1" = "-c" ] || [ "$#" -gt 0 ]; then
+    exec /bin/bash "$@"
+fi
+
+# Set the TERMBOX_DEFAULT_SESSION flag
+export TERMBOX_DEFAULT_SESSION="ubuntu"
+export TERMBOX_HOST_SHELL="${TERMBOX_PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/bash"
+
+# Check if the termbox-ubuntu entry point exists and is executable
+TERMBOX_UBUNTU="${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/termbox-ubuntu"
+if [ -x "${TERMBOX_UBUNTU}" ]; then
+    exec "${TERMBOX_UBUNTU}"
+fi
+
+# Fallback: try proot-distro directly
+PROOT_DISTRO="${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/proot-distro"
+if [ -x "${PROOT_DISTRO}" ]; then
+    exec "${PROOT_DISTRO}" login ubuntu
+fi
+
+# Last resort: drop to native shell
+echo "TermBox: Ubuntu entry point not found, starting native shell."
+exec "${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/bash" --login

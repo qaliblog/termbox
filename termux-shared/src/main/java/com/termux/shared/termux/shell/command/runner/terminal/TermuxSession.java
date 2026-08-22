@@ -10,7 +10,6 @@ import com.google.common.base.Joiner;
 import com.termux.shared.R;
 import com.termux.shared.shell.command.ExecutionCommand;
 import com.termux.shared.shell.command.environment.ShellEnvironmentUtils;
-import com.termux.shared.shell.command.environment.UnixShellEnvironment;
 import com.termux.shared.shell.command.result.ResultData;
 import com.termux.shared.errors.Errno;
 import com.termux.shared.logger.Logger;
@@ -93,7 +92,10 @@ public class TermuxSession {
         boolean isLoginShell = false;
         if (executionCommand.executable == null) {
             if (!executionCommand.isFailsafe) {
-                for (String shellBinary : UnixShellEnvironment.LOGIN_SHELL_BINARIES) {
+                // Use the overridable login shell binaries list from the shell environment
+                // This allows TermBox to prioritize termbox-shell-wrapper for Ubuntu auto-login
+                String[] loginShellBinaries = shellEnvironmentClient.getLoginShellBinaries();
+                for (String shellBinary : loginShellBinaries) {
                     File shellFile = new File(defaultBinPath, shellBinary);
                     if (shellFile.canExecute()) {
                         executionCommand.executable = shellFile.getAbsolutePath();

@@ -1,0 +1,155 @@
+{
+  "_comment": "TermBox Asset Manifest - All URLs must be pinned to specific versions with SHA-256 verification",
+  "_schema_version": "1.0.0",
+
+  "bootstrap": {
+    "description": "Termux bootstrap packages for the TermBox prefix",
+    "version": "2026.02.12-r1+apt.android-7",
+    "url_pattern": "https://github.com/termux/termux-packages/releases/download/bootstrap-{version}/bootstrap-{arch}.zip",
+    "architecture": "multi-arch",
+    "compression": "zip",
+    "required_for_offline": true,
+    "license": "MIT",
+    "license_url": "https://github.com/termux/termux-packages/blob/master/LICENSE.txt",
+    "source": "https://github.com/termux/termux-packages",
+    "variants": {
+      "aarch64": {
+        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-aarch64.zip",
+        "sha256": "ea2aeba8819e517db711f8c32369e89e7c52cee73e07930ff91185e1ab93f4f3",
+        "filename": "bootstrap-aarch64.zip",
+        "size_estimate_mb": 30
+      },
+      "arm": {
+        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-arm.zip",
+        "sha256": "a38f4d3b2f735f83be2bf54eff463e86dc32a3e2f9f861c1557c4378d249c018",
+        "filename": "bootstrap-arm.zip",
+        "size_estimate_mb": 28
+      },
+      "i686": {
+        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-i686.zip",
+        "sha256": "f5bc0b025b9f3b420b5fcaeefc064f888f5f22a0d6fd7090f4aac0c33eb3555b",
+        "filename": "bootstrap-i686.zip",
+        "size_estimate_mb": 28
+      },
+      "x86_64": {
+        "url": "https://github.com/termux/termux-packages/releases/download/bootstrap-2026.02.12-r1%2Bapt.android-7/bootstrap-x86_64.zip",
+        "sha256": "b7fd0f2e3a4de534be3144f9f91acc768630fc463eaf134ab2e64c545e834f7a",
+        "filename": "bootstrap-x86_64.zip",
+        "size_estimate_mb": 30
+      }
+    },
+    "destination": "bootstrap/{arch}.zip",
+    "extract_to": "bootstrap/"
+  },
+
+  "proot": {
+    "description": "PRoot binary for user-space chroot/proot emulation",
+    "version": "6.1.0",
+    "url": "https://github.com/termux/termux-packages/releases/download/proot-6.1.0/proot-aarch64.tar.xz",
+    "sha256": "PLACEHOLDER_PROOT_SHA256_TO_BE_VERIFIED",
+    "filename": "proot-aarch64.tar.xz",
+    "architecture": "aarch64",
+    "compression": "tar.xz",
+    "required_for_offline": true,
+    "license": "GPL-2.0",
+    "license_url": "https://github.com/termux/termux-packages/blob/master/packages/proot/build.sh",
+    "source": "https://github.com/termux/termux-packages",
+    "destination": "proot/proot-aarch64",
+    "extract_to": "proot/"
+  },
+
+  "proot-distro": {
+    "description": "proot-distro - utility for managing proot distributions",
+    "version": "5.7.0",
+    "url": "https://github.com/termux/proot-distro/archive/refs/tags/v5.7.0.tar.gz",
+    "sha256": "PLACEHOLDER_PROOT_DISTRO_SHA256_TO_BE_VERIFIED",
+    "filename": "proot-distro-5.7.0.tar.gz",
+    "architecture": "all",
+    "compression": "tar.gz",
+    "required_for_offline": true,
+    "license": "MIT",
+    "license_url": "https://github.com/termux/proot-distro/blob/master/LICENSE",
+    "source": "https://github.com/termux/proot-distro",
+    "destination": "proot-distro/proot-distro-5.7.0.tar.gz",
+    "extract_to": "proot-distro/",
+    "install_files": [
+      "proot_distro/",
+      "proot-distro.py",
+      "LICENSE"
+    ]
+  },
+
+  "ubuntu": {
+    "description": "Ubuntu ARM64 minimal rootfs for proot-distro",
+    "version": "22.04.5 LTS (Jammy Jellyfish)",
+    "url": "https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
+    "sha256": "PLACEHOLDER_UBUNTU_ROOTFS_SHA256_TO_BE_VERIFIED",
+    "filename": "ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
+    "architecture": "arm64",
+    "compression": "tar.xz",
+    "required_for_offline": true,
+    "license": "CC-BY-SA 4.0",
+    "license_url": "https://ubuntu.com/legal/intellectual-property-policy",
+    "source": "https://cloud-images.ubuntu.com",
+    "destination": "ubuntu/ubuntu-22.04-arm64-root.tar.xz",
+    "extract_to": "ubuntu/",
+    "proot_distro_name": "ubuntu",
+    "expected_first_inode": 1048576
+  },
+
+  "box64": {
+    "description": "Box64 - Linux userspace x86_64 emulator targeting ARM64",
+    "version": "0.4.4",
+    "url": "https://github.com/ptitSeb/box64/releases/download/v0.4.4/box64-android-arm64.tar.xz",
+    "sha256": "PLACEHOLDER_BOX64_SHA256_TO_BE_VERIFIED",
+    "filename": "box64-android-arm64.tar.xz",
+    "architecture": "aarch64",
+    "compression": "tar.xz",
+    "required_for_offline": true,
+    "license": "MIT",
+    "license_url": "https://github.com/ptitSeb/box64/blob/main/LICENSE",
+    "source": "https://github.com/ptitSeb/box64",
+    "destination": "box64/box64",
+    "extract_to": "box64/",
+    "notes": "Must be compiled for Android ARM64 with proper system call handling. Standard Linux ARM64 builds may not work on Android due to Bionic libc differences."
+  },
+
+  "box86": {
+    "description": "Box86 - Linux userspace x86 emulator targeting ARM (32-bit fallback)",
+    "version": "0.3.6",
+    "url": "https://github.com/ptitSeb/box86/releases/download/v0.3.6/box86-android-arm.tar.xz",
+    "sha256": "PLACEHOLDER_BOX86_SHA256_TO_BE_VERIFIED",
+    "filename": "box86-android-arm.tar.xz",
+    "architecture": "arm",
+    "compression": "tar.xz",
+    "required_for_offline": false,
+    "license": "MIT",
+    "license_url": "https://github.com/ptitSeb/box86/blob/master/LICENSE",
+    "source": "https://github.com/ptitSeb/box86",
+    "destination": "box86/box86",
+    "extract_to": "box86/",
+    "notes": "Optional - provides x86 (32-bit) support. Only needed if running 32-bit x86 binaries."
+  },
+
+  "termbox-config": {
+    "description": "TermBox default configuration files",
+    "version": "0.1.0",
+    "url": null,
+    "sha256": null,
+    "filename": null,
+    "architecture": "all",
+    "compression": null,
+    "required_for_offline": true,
+    "license": "MIT",
+    "license_url": null,
+    "source": "local",
+    "destination": "config/",
+    "extract_to": "config/",
+    "files": [
+      "termbox-ubuntu.sh",
+      "termbox-env.sh",
+      "termbox-elf-wrapper.sh",
+      "termbox-version.json"
+    ]
+  }
+}

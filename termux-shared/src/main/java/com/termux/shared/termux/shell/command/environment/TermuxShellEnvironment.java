@@ -78,6 +78,12 @@ public class TermuxShellEnvironment extends AndroidShellEnvironment {
         environment.put(ENV_HOME, TermuxConstants.TERMUX_HOME_DIR_PATH);
         environment.put(ENV_PREFIX, TermuxConstants.TERMUX_PREFIX_DIR_PATH);
 
+        // TermBox Ubuntu session configuration
+        // When TERMBOX_DEFAULT_SESSION is set to "ubuntu", the login shell wrapper
+        // will automatically enter the Ubuntu ARM64 environment via proot-distro.
+        environment.put("TERMBOX_DEFAULT_SESSION", "ubuntu");
+        environment.put("TERMBOX_HOST_SHELL", TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/bash");
+
         // If failsafe is not enabled, then we keep default PATH and TMPDIR so that system binaries can be used
         if (!isFailSafe) {
             environment.put(ENV_TMPDIR, TermuxConstants.TERMUX_TMP_PREFIX_DIR_PATH);
@@ -106,6 +112,25 @@ public class TermuxShellEnvironment extends AndroidShellEnvironment {
     @Override
     public String getDefaultBinPath() {
         return TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH;
+    }
+
+    /**
+     * Override login shell binaries to prioritize TermBox shell wrapper.
+     * When termbox-shell-wrapper is installed in $PREFIX/bin/, it will be
+     * selected as the default login shell, which automatically enters Ubuntu.
+     *
+     * The termbox-shell-wrapper checks TERMBOX_DEFAULT_SESSION and routes
+     * to proot-distro ubuntu if set.
+     */
+    @NonNull
+    @Override
+    public String[] getLoginShellBinaries() {
+        String[] baseBinaries = super.getLoginShellBinaries();
+        // Prepend TermBox Ubuntu entry point
+        String[] termboxBinaries = new String[baseBinaries.length + 1];
+        termboxBinaries[0] = "termbox-shell-wrapper";
+        System.arraycopy(baseBinaries, 0, termboxBinaries, 1, baseBinaries.length);
+        return termboxBinaries;
     }
 
     @NonNull

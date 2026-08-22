@@ -19,7 +19,7 @@ import com.termux.shared.termux.theme.TermuxThemeUtils;
 
 public class TermuxApplication extends Application {
 
-    private static final String LOG_TAG = "TermuxApplication";
+    private static final String LOG_TAG = "TermBoxApplication";
 
     public void onCreate() {
         super.onCreate();

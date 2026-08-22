@@ -346,10 +346,10 @@ public final class TermuxConstants {
      * Termux and its plugin app and package names and urls.
      */
 
-    /** Termux app name */
-    public static final String TERMUX_APP_NAME = "Termux"; // Default: "Termux"
-    /** Termux package name */
-    public static final String TERMUX_PACKAGE_NAME = "com.termux"; // Default: "com.termux"
+    /** TermBox app name */
+    public static final String TERMUX_APP_NAME = "TermBox"; // TermBox: TermBox
+    /** TermBox package name - the Android applicationId */
+    public static final String TERMUX_PACKAGE_NAME = "com.qali.termbox"; // TermBox: com.qali.termbox
     /** Termux GitHub repo name */
     public static final String TERMUX_GITHUB_REPO_NAME = "termux-app"; // Default: "termux-app"
     /** Termux GitHub repo url */

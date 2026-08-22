@@ -1,0 +1,445 @@
+/**
+ * TermBox Asset Preparation Build Script
+ *
+ * This script defines Gradle tasks for downloading, verifying, and preparing
+ * all runtime assets required for the TermBox offline APK.
+ *
+ * Tasks:
+ *   prepareTermBoxAssets - Download and prepare all assets for the APK
+ *   cleanTermBoxAssets   - Remove downloaded and prepared assets
+ *
+ * Usage:
+ *   ./gradlew prepareTermBoxAssets              # Download and prepare assets
+ *   ./gradlew assembleRelease                   # Build APK (auto-runs prepareTermBoxAssets)
+ *   ./gradlew assembleRelease -PtermboxOffline=true  # Build APK without network access
+ *   ./gradlew cleanTermBoxAssets                # Clear asset cache
+ */
+
+import groovy.json.JsonSlurper
+import java.security.MessageDigest
+import java.security.DigestInputStream
+
+// TermBox configuration
+ext {
+    termboxOffline = project.hasProperty('termboxOffline') ? project.property('termboxOffline').toBoolean() : false
+
+    // Asset directories
+    termboxAssetsDir = new File(project.rootDir, 'termbox-assets')
+    termboxCacheDir = new File(project.rootDir, 'build/termbox-assets')
+    termboxDownloadsDir = new File(termboxCacheDir, 'downloads')
+    termboxExtractedDir = new File(termboxCacheDir, 'extracted')
+    termboxManifestDir = new File(termboxCacheDir, 'manifest')
+
+    // APK asset destination (inside app module)
+    termboxApkAssetsDir = new File(project(':app').projectDir, 'src/main/assets/termbox-runtime')
+}
+
+/**
+ * Calculate SHA-256 hash of a file
+ */
+def calculateSha256(File file) {
+    def digest = MessageDigest.getInstance("SHA-256")
+    def buffer = new byte[8192]
+    def input = new FileInputStream(file)
+    def digestStream = new DigestInputStream(input, digest)
+    while (digestStream.read(buffer) != -1) { /* read to calculate digest */ }
+    digestStream.close()
+    def hash = new BigInteger(1, digest.digest()).toString(16)
+    while (hash.length() < 64) { hash = "0" + hash }
+    return hash
+}
+
+/**
+ * Download a file with SHA-256 verification and idempotent caching
+ */
+def downloadAsset(String name, String url, String expectedSha256, File destFile, boolean offline) {
+    // Check if file already exists and is valid
+    if (destFile.exists()) {
+        if (expectedSha256 != null && expectedSha256.startsWith("PLACEHOLDER")) {
+            logger.quiet("  [${name}] Skipping SHA-256 check (placeholder hash)")
+            logger.quiet("  [${name}] Using existing file: ${destFile.name} (${destFile.length()} bytes)")
+            return true
+        }
+        if (expectedSha256 != null) {
+            def actualSha256 = calculateSha256(destFile)
+            if (actualSha256 == expectedSha256) {
+                logger.quiet("  [${name}] Asset already cached and verified: ${destFile.name}")
+                return true
+            } else {
+                logger.quiet("  [${name}] Cached file has wrong hash, re-downloading...")
+                destFile.delete()
+            }
+        } else {
+            logger.quiet("  [${name}] Using existing file: ${destFile.name} (${destFile.length()} bytes)")
+            return true
+        }
+    }
+
+    // Check offline mode
+    if (offline) {
+        def errorMsg = """
+TermBox asset missing: ${name}
+
+The required build asset was not found in the local cache and could
+not be downloaded (offline mode is enabled).
+
+To build offline, place the correct asset in:
+    ${destFile.parentFile.absolutePath}/${destFile.name}
+
+Expected SHA-256: ${expectedSha256 ?: 'N/A'}
+Expected URL: ${url}
+
+To download this asset, run a build without -PtermboxOffline=true first.
+"""
+        throw new GradleException(errorMsg)
+    }
+
+    // Download
+    if (url == null) {
+        logger.quiet("  [${name}] No URL provided, skipping download (local asset)")
+        return true
+    }
+
+    logger.quiet("  [${name}] Downloading from: ${url}")
+    destFile.parentFile.mkdirs()
+
+    // Download to .part file first (atomic download)
+    def partFile = new File(destFile.parentFile, destFile.name + ".part")
+    try {
+        def connection = new URL(url).openConnection()
+        connection.setInstanceFollowRedirects(true)
+        connection.setConnectTimeout(30000)
+        connection.setReadTimeout(60000)
+
+        def out = new BufferedOutputStream(new FileOutputStream(partFile))
+        if (expectedSha256 != null && !expectedSha256.startsWith("PLACEHOLDER")) {
+            def digest = MessageDigest.getInstance("SHA-256")
+            def digestStream = new DigestInputStream(connection.inputStream, digest)
+            out << digestStream
+            out.close()
+
+            def actualSha256 = new BigInteger(1, digest.digest()).toString(16)
+            while (actualSha256.length() < 64) { actualSha256 = "0" + actualSha256 }
+
+            if (actualSha256 != expectedSha256) {
+                partFile.delete()
+                throw new GradleException("  [${name}] SHA-256 mismatch!\n    Expected: ${expectedSha256}\n    Actual:   ${actualSha256}")
+            }
+        } else {
+            out << connection.inputStream
+            out.close()
+        }
+
+        // Rename .part to final file (atomic)
+        if (destFile.exists()) destFile.delete()
+        partFile.renameTo(destFile)
+        logger.quiet("  [${name}] Downloaded and verified: ${destFile.name} (${destFile.length()} bytes)")
+        return true
+
+    } catch (Exception e) {
+        partFile.delete()
+        throw new GradleException("  [${name}] Download failed: ${e.message}", e)
+    }
+}
+
+/**
+ * Create the prepareTermBoxAssets task
+ */
+task prepareTermBoxAssets {
+    description = 'Downloads and prepares all TermBox runtime assets for offline APK packaging'
+    group = 'TermBox'
+
+    doLast {
+        logger.quiet("\n========================================")
+        logger.quiet("        TermBox Asset Preparation")
+        logger.quiet("========================================\n")
+
+        // Load manifest
+        def manifestFile = new File(termboxAssetsDir, 'manifest.json')
+        if (!manifestFile.exists()) {
+            throw new GradleException("TermBox manifest not found at: ${manifestFile.absolutePath}")
+        }
+        def manifest = new JsonSlurper().parse(manifestFile)
+
+        // Ensure directories exist
+        termboxDownloadsDir.mkdirs()
+        termboxExtractedDir.mkdirs()
+        termboxManifestDir.mkdirs()
+        termboxApkAssetsDir.mkdirs()
+
+        def downloaded = 0
+        def cached = 0
+        def errors = []
+
+        // --- 1. Download/verify Bootstrap ---
+        logger.quiet("\n--- Preparing Bootstrap ---")
+        def bootstrap = manifest.bootstrap
+        def arch = 'aarch64' // Primary target architecture
+        def bootstrapInfo = bootstrap.variants[arch]
+        if (bootstrapInfo) {
+            def destFile = new File(termboxDownloadsDir, bootstrapInfo.filename)
+            try {
+                downloadAsset("bootstrap-${arch}", bootstrapInfo.url, bootstrapInfo.sha256, destFile, termboxOffline)
+                // Copy to APK assets
+                def apkDest = new File(termboxApkAssetsDir, "bootstrap/${arch}.zip")
+                apkDest.parentFile.mkdirs()
+                if (!apkDest.exists() || apkDest.length() != destFile.length()) {
+                    java.nio.file.Files.copy(destFile.toPath(), apkDest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+                cached++
+            } catch (Exception e) {
+                errors << "bootstrap-${arch}: ${e.message}"
+            }
+        }
+
+        // --- 2. Download/verify PRoot ---
+        logger.quiet("\n--- Preparing PRoot ---")
+        def proot = manifest.proot
+        def prootFile = new File(termboxDownloadsDir, proot.filename)
+        try {
+            downloadAsset("proot", proot.url, proot.sha256, prootFile, termboxOffline)
+            // Extract proot binary to APK assets
+            def prootExtractDir = new File(termboxExtractedDir, 'proot')
+            prootExtractDir.mkdirs()
+            if (prootFile.exists()) {
+                // Extract the tar.xz
+                def prootDest = new File(termboxApkAssetsDir, "proot/proot")
+                prootDest.parentFile.mkdirs()
+                try {
+                    "tar -xJf ${prootFile.absolutePath} -C ${prootExtractDir.absolutePath}".execute().waitFor()
+                    // Find and copy the proot binary
+                    def prootBin = prootExtractDir.listFiles()?.find { it.name == 'proot' }
+                    if (prootBin) {
+                        java.nio.file.Files.copy(prootBin.toPath(), prootDest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    } else {
+                        // Might be directly the binary
+                        java.nio.file.Files.copy(prootFile.toPath(), prootDest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                } catch (Exception e) {
+                    logger.quiet("  [proot] tar extraction failed, copying raw: ${e.message}")
+                    java.nio.file.Files.copy(prootFile.toPath(), prootDest.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            cached++
+        } catch (Exception e) {
+            errors << "proot: ${e.message}"
+        }
+
+        // --- 3. Download/verify proot-distro ---
+        logger.quiet("\n--- Preparing proot-distro ---")
+        def prootDistro = manifest.'proot-distro'
+        def prootDistroFile = new File(termboxDownloadsDir, prootDistro.filename)
+        try {
+            downloadAsset("proot-distro", prootDistro.url, prootDistro.sha256, prootDistroFile, termboxOffline)
+            // Extract proot-distro to APK assets
+            if (prootDistroFile.exists()) {
+                def prootDistroExtractDir = new File(termboxExtractedDir, 'proot-distro')
+                prootDistroExtractDir.mkdirs()
+                try {
+                    "tar -xzf ${prootDistroFile.absolutePath} -C ${prootDistroExtractDir.absolutePath} --strip-components=1".execute().waitFor()
+                    // Copy to APK assets
+                    def apkPdDir = new File(termboxApkAssetsDir, "proot-distro")
+                    apkPdDir.mkdirs()
+                    "cp -r ${prootDistroExtractDir.absolutePath}/. ${apkPdDir.absolutePath}/".execute().waitFor()
+                } catch (Exception e) {
+                    logger.quiet("  [proot-distro] extraction failed: ${e.message}")
+                }
+            }
+            cached++
+        } catch (Exception e) {
+            errors << "proot-distro: ${e.message}"
+        }
+
+        // --- 4. Download/verify Ubuntu rootfs ---
+        logger.quiet("\n--- Preparing Ubuntu Rootfs ---")
+        def ubuntu = manifest.ubuntu
+        def ubuntuFile = new File(termboxDownloadsDir, ubuntu.filename)
+        try {
+            downloadAsset("ubuntu-rootfs", ubuntu.url, ubuntu.sha256, ubuntuFile, termboxOffline)
+            // Copy to APK assets (large file, keep compressed)
+            if (ubuntuFile.exists()) {
+                def apkUbuntu = new File(termboxApkAssetsDir, "ubuntu/${ubuntu.filename}")
+                apkUbuntu.parentFile.mkdirs()
+                if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuFile.length()) {
+                    java.nio.file.Files.copy(ubuntuFile.toPath(), apkUbuntu.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            cached++
+        } catch (Exception e) {
+            errors << "ubuntu-rootfs: ${e.message}"
+        }
+
+        // --- 5. Download/verify Box64 ---
+        logger.quiet("\n--- Preparing Box64 ---")
+        def box64 = manifest.box64
+        def box64File = new File(termboxDownloadsDir, box64.filename)
+        try {
+            downloadAsset("box64", box64.url, box64.sha256, box64File, termboxOffline)
+            // Extract and copy box64 binary to APK assets
+            if (box64File.exists()) {
+                def box64ExtractDir = new File(termboxExtractedDir, 'box64')
+                box64ExtractDir.mkdirs()
+                try {
+                    "tar -xJf ${box64File.absolutePath} -C ${box64ExtractDir.absolutePath}".execute().waitFor()
+                    def box64Bin = box64ExtractDir.listFiles()?.find { it.name == 'box64' }
+                    if (box64Bin) {
+                        def apkBox64 = new File(termboxApkAssetsDir, "box64/box64")
+                        apkBox64.parentFile.mkdirs()
+                        java.nio.file.Files.copy(box64Bin.toPath(), apkBox64.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                } catch (Exception e) {
+                    logger.quiet("  [box64] extraction failed, copying raw: ${e.message}")
+                    def apkBox64 = new File(termboxApkAssetsDir, "box64/box64")
+                    apkBox64.parentFile.mkdirs()
+                    java.nio.file.Files.copy(box64File.toPath(), apkBox64.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            cached++
+        } catch (Exception e) {
+            errors << "box64: ${e.message}"
+        }
+
+        // --- 6. Copy TermBox config scripts ---
+        logger.quiet("\n--- Copying TermBox Configuration ---")
+        def configSource = new File(termboxAssetsDir, 'config')
+        def configDest = new File(termboxApkAssetsDir, 'config')
+        configDest.mkdirs()
+        if (configSource.exists()) {
+            configSource.listFiles()?.each { file ->
+                if (file.isFile()) {
+                    java.nio.file.Files.copy(file.toPath(), new File(configDest, file.name).toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+            }
+            logger.quiet("  [config] Configuration files copied")
+        }
+
+        // --- 7. Copy license file ---
+        def licenseSource = new File(project(':app').projectDir, 'src/main/res/raw/termbox_licenses.txt')
+        if (licenseSource.exists()) {
+            def licenseDest = new File(termboxApkAssetsDir, 'LICENSES.txt')
+            java.nio.file.Files.copy(licenseSource.toPath(), licenseDest.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+            logger.quiet("  [licenses] License file copied")
+        }
+
+        // --- 8. Write resolved manifest ---
+        def resolvedManifest = [
+            timestamp: new Date().format("yyyy-MM-dd'T'HH:mm:ss'Z'"),
+            offline_mode: termboxOffline,
+            assets_cached: cached,
+            assets_downloaded: downloaded,
+            errors: errors,
+            manifest_hash: calculateSha256(manifestFile)
+        ]
+        new File(termboxManifestDir, 'resolved-assets.json').text =
+            new groovy.json.JsonBuilder(resolvedManifest).toPrettyString()
+
+        // --- Summary ---
+        logger.quiet("\n========================================")
+        logger.quiet("    TermBox Asset Preparation Complete")
+        logger.quiet("========================================")
+        logger.quiet("  Offline mode: ${termboxOffline}")
+        logger.quiet("  Assets cached: ${cached}")
+        logger.quiet("  Errors: ${errors.size()}")
+        if (errors) {
+            errors.each { logger.quiet("    - ${it}") }
+        }
+        logger.quiet("  Download dir: ${termboxDownloadsDir.absolutePath}")
+        logger.quiet("  APK assets:   ${termboxApkAssetsDir.absolutePath}")
+        logger.quiet("========================================\n")
+
+        if (errors && !errors.isEmpty()) {
+            throw new GradleException("TermBox asset preparation completed with ${errors.size()} error(s). See above for details.")
+        }
+    }
+}
+
+/**
+ * Create the cleanTermBoxAssets task
+ */
+task cleanTermBoxAssets {
+    description = 'Removes all downloaded and prepared TermBox assets (next build will re-download)'
+    group = 'TermBox'
+
+    doLast {
+        logger.quiet("\n========================================")
+        logger.quiet("    Cleaning TermBox Assets")
+        logger.quiet("========================================\n")
+
+        def dirs = [termboxCacheDir, termboxApkAssetsDir]
+        dirs.each { dir ->
+            if (dir.exists()) {
+                logger.quiet("  Removing: ${dir.absolutePath}")
+                dir.deleteDir()
+            }
+        }
+
+        logger.quiet("\n  WARNING: The next build will need to download all assets again.")
+        logger.quiet("  If you need to build offline, do NOT clean the assets.\n")
+        logger.quiet("========================================\n")
+    }
+}
+
+/**
+ * Print build summary
+ */
+task termboxBuildSummary {
+    description = 'Prints a summary of the TermBox build configuration'
+    group = 'TermBox'
+
+    doLast {
+        def bootstrapReady = new File(termboxApkAssetsDir, "bootstrap/aarch64.zip").exists()
+        def prootReady = new File(termboxApkAssetsDir, "proot/proot").exists()
+        def ubuntuReady = new File(termboxApkAssetsDir, "ubuntu/").exists() &&
+                          new File(termboxApkAssetsDir, "ubuntu/").listFiles()?.any { it.name.endsWith('.tar.xz') }
+        def box64Ready = new File(termboxApkAssetsDir, "box64/box64").exists()
+        def prootDistroReady = new File(termboxApkAssetsDir, "proot-distro/").exists()
+
+        logger.quiet("\n========================================")
+        logger.quiet("        TermBox Build Summary")
+        logger.quiet("========================================\n")
+        logger.quiet("Application:")
+        logger.quiet("  Name: termbox")
+        logger.quiet("  Package: com.qali.termbox\n")
+        logger.quiet("Architecture:")
+        logger.quiet("  Target: ARM64 / AArch64\n")
+        logger.quiet("Offline Runtime:")
+        logger.quiet("  Bootstrap:     ${bootstrapReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  proot-distro:  ${prootDistroReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  Ubuntu ARM64:  ${ubuntuReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  Box64:         ${box64Ready ? 'READY' : 'MISSING'}")
+        logger.quiet("  PRoot:         ${prootReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  x86_64 fallback: ENABLED\n")
+
+        def assetsDir = termboxDownloadsDir
+        def cachedCount = assetsDir.exists() ? assetsDir.listFiles()?.length ?: 0 : 0
+        def totalSize = 0L
+        if (assetsDir.exists()) {
+            assetsDir.listFiles()?.each { totalSize += it.length() }
+        }
+        logger.quiet("Assets:")
+        logger.quiet("  Cached: ${cachedCount} files")
+        logger.quiet("  Size:   ${totalSize / (1024 * 1024)} MB\n")
+
+        def resolvedManifest = new File(termboxManifestDir, 'resolved-assets.json')
+        if (resolvedManifest.exists()) {
+            def manifest = new JsonSlurper().parse(resolvedManifest)
+            logger.quiet("Last preparation:")
+            logger.quiet("  Timestamp: ${manifest.timestamp}")
+            logger.quiet("  Offline: ${manifest.offline_mode}")
+        }
+
+        logger.quiet("\n========================================\n")
+    }
+}
+
+// Make assemble tasks depend on prepareTermBoxAssets
+afterEvaluate {
+    // Hook into all variant assemblies
+    tasks.configureEach { task ->
+        if (task.name.startsWith('assemble') && task.name != 'assembleTermBoxAssets') {
+            task.dependsOn prepareTermBoxAssets
+        }
+    }
+}

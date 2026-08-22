@@ -10,10 +10,17 @@ ext {
     // by replacing $PREFIX since app code is dependant on the variant used to build the APK.
     // Currently supported values are: [ "apt-android-7" "apt-android-5" ]
     packageVariant = System.getenv("TERMUX_PACKAGE_VARIANT") ?: "apt-android-7" // Default: "apt-android-7"
+
+    // TermBox configuration
+    termboxPackageName = System.getenv("TERMBOX_PACKAGE_ID") ?: project.findProperty('TERMBOX_PACKAGE_ID') ?: 'com.qali.termbox'
+    termboxAppName = System.getenv("TERMBOX_APP_NAME") ?: project.findProperty('TERMBOX_APP_NAME') ?: 'termbox'
 }
 
 android {
+    // namespace controls the R class and BuildConfig package - keep as com.termux for source compatibility
     namespace "com.termux"
+    // applicationId is the Android package name visible to the Play Store and the system
+    applicationId project.ext.termboxPackageName
 
     compileSdkVersion project.properties.compileSdkVersion.toInteger()
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
@@ -51,14 +58,14 @@ android {
 
         buildConfigField "String", "TERMUX_PACKAGE_VARIANT", "\"" + project.ext.packageVariant + "\"" // Used by TermuxApplication class
 
-        manifestPlaceholders.TERMUX_PACKAGE_NAME = "com.termux"
-        manifestPlaceholders.TERMUX_APP_NAME = "Termux"
-        manifestPlaceholders.TERMUX_API_APP_NAME = "Termux:API"
-        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "Termux:Boot"
-        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "Termux:Float"
-        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "Termux:Styling"
-        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "Termux:Tasker"
-        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "Termux:Widget"
+        manifestPlaceholders.TERMUX_PACKAGE_NAME = project.ext.termboxPackageName
+        manifestPlaceholders.TERMUX_APP_NAME = project.ext.termboxAppName
+        manifestPlaceholders.TERMUX_API_APP_NAME = "TermBox:API"
+        manifestPlaceholders.TERMUX_BOOT_APP_NAME = "TermBox:Boot"
+        manifestPlaceholders.TERMUX_FLOAT_APP_NAME = "TermBox:Float"
+        manifestPlaceholders.TERMUX_STYLING_APP_NAME = "TermBox:Styling"
+        manifestPlaceholders.TERMUX_TASKER_APP_NAME = "TermBox:Tasker"
+        manifestPlaceholders.TERMUX_WIDGET_APP_NAME = "TermBox:Widget"
 
         externalNativeBuild {
             ndkBuild {
@@ -132,10 +139,10 @@ android {
         variant.outputs.all { output ->
             if (variant.buildType.name == "debug") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("termbox_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "debug") + "_" + (abi ? abi : "universal") + ".apk")
             } else if (variant.buildType.name == "release") {
                 def abi = output.getFilter(com.android.build.OutputFile.ABI)
-                outputFileName = new File("termux-app_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
+                outputFileName = new File("termbox_" + (apkVersionTag ? apkVersionTag : project.ext.packageVariant + "-" + "release") + "_" + (abi ? abi : "universal") + ".apk")
             }
         }
     }

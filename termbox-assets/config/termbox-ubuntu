@@ -1,0 +1,85 @@
+#!/bin/bash
+# termbox-ubuntu - Default TermBox shell that enters Ubuntu ARM64
+#
+# This script is the default login shell for TermBox terminal sessions.
+# It launches Ubuntu via proot-distro, providing a complete offline
+# Ubuntu ARM64 environment with Box64 transparent x86_64 support.
+#
+# To exit Ubuntu and return to the native TermBox shell:
+#   termbox-host
+#
+# To start a new session directly in the TermBox host shell:
+#   Use the TermBox settings to set default shell to host mode.
+#
+# Copyright (c) TermBox Contributors
+# SPDX-License-Identifier: MIT
+
+set -e
+
+# Paths
+TERMBOX_APP_DIR="${ANDROID_DATA:-/data/data/com.qali.termbox}"
+TERMBOX_PREFIX="${TERMBOX_APP_DIR}/files/usr"
+TERMBOX_HOME="${TERMBOX_APP_DIR}/files/home"
+TERMBOX_UROOT="${TERMBOX_APP_DIR}/files/ubuntu-root"
+PROOT="${TERMBOX_PREFIX}/bin/proot"
+BOX64="${TERMBOX_PREFIX}/bin/box64"
+
+# Detect if we are already inside proot (avoid nested sessions)
+if [ -f /.proot.* ] || [ "$(id -u 2>/dev/null)" = "0" ] && [ -f /etc/ubuntu-release ] 2>/dev/null; then
+    # We appear to be inside a proot environment already
+    # Just drop to a regular shell
+    exec /bin/bash --login
+fi
+
+# Check if Ubuntu rootfs exists
+if [ ! -d "${TERMBOX_UROOT}" ] || [ ! -f "${TERMBOX_UROOT}/etc/os-release" ]; then
+    echo "TermBox: Ubuntu rootfs not found at ${TERMBOX_UROOT}"
+    echo "TermBox: Falling back to native TermBox shell."
+    echo ""
+    exec "${TERMBOX_PREFIX}/bin/bash" --login
+fi
+
+# Check if proot exists
+if [ ! -x "${PROOT}" ]; then
+    echo "TermBox: proot not found at ${PROOT}"
+    echo "TermBox: Falling back to native TermBox shell."
+    echo ""
+    exec "${TERMBOX_PREFIX}/bin/bash" --login
+fi
+
+# Export Box64 environment for x86_64 transparent execution inside Ubuntu
+export BOX64_DYNAREC=1
+export BOX64_DYNAREC_STRONGMEM=1
+export BOX64_DYNAREC_BIGBLOCK=1
+export BOX64_DYNAREC_SAFEFLAGS=1
+export BOX64_DYNAREC_BLEEDING_EDGE=1
+export BOX64_ENV=0
+export BOX64_LOG=0
+export BOX64_NOBANNER=0
+
+# Launch Ubuntu via proot
+exec "${PROOT}" \
+    --link2symlink \
+    --kill-on-exit \
+    --root-id \
+    --cwd /root \
+    -b /dev \
+    -b /proc \
+    -b /sys \
+    -b "${TERMBOX_HOME}:/root" \
+    -b "${TERMBOX_HOME}/storage:/mnt/storage" \
+    -b "${TERMBOX_PREFIX}/tmp:/tmp" \
+    -b "${BOX64}:/usr/local/bin/box64" \
+    -r "${TERMBOX_UROOT}" \
+    /usr/bin/env -i \
+    HOME=/root \
+    USER=root \
+    TERM="${TERM:-xterm-256color}" \
+    LANG=en_US.UTF-8 \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    BOX64_DYNAREC=1 \
+    BOX64_DYNAREC_STRONGMEM=1 \
+    BOX64_DYNAREC_BIGBLOCK=1 \
+    BOX64_DYNAREC_SAFEFLAGS=1 \
+    BOX64_DYNAREC_BLEEDING_EDGE=1 \
+    /bin/bash --login

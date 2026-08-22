@@ -49,4 +49,15 @@ public interface IShellEnvironment {
     HashMap<String, String> setupShellCommandEnvironment(@NonNull Context currentPackageContext,
                                                          @NonNull ExecutionCommand executionCommand);
 
+    /**
+     * Get the list of login shell binaries to try when no specific executable is set.
+     * This allows subclasses to override the default list and prioritize specific shells.
+     *
+     * @return Should return the array of login shell binary names to try.
+     */
+    @NonNull
+    default String[] getLoginShellBinaries() {
+        return UnixShellEnvironment.LOGIN_SHELL_BINARIES;
+    }
+
 }

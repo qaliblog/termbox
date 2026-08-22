@@ -397,15 +397,27 @@ public final class TermuxActivity extends AppCompatActivity implements ServiceCo
         if (mTermuxService.isTermuxSessionsEmpty()) {
             if (mIsVisible) {
                 TermuxInstaller.setupBootstrapIfNeeded(TermuxActivity.this, () -> {
-                    if (mTermuxService == null) return; // Activity might have been destroyed.
-                    try {
-                        boolean launchFailsafe = false;
-                        if (intent != null && intent.getExtras() != null) {
-                            launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);
+                    // After bootstrap is installed, also install TermBox offline runtime
+                    // (Ubuntu rootfs, proot-distro, Box64, etc.)
+                    Runnable launchSession = () -> {
+                        if (mTermuxService == null) return; // Activity might have been destroyed.
+                        try {
+                            boolean launchFailsafe = false;
+                            if (intent != null && intent.getExtras() != null) {
+                                launchFailsafe = intent.getExtras().getBoolean(TERMUX_ACTIVITY.EXTRA_FAILSAFE_SESSION, false);
+                            }
+                            mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);
+                        } catch (WindowManager.BadTokenException e) {
+                            // Activity finished - ignore.
                         }
-                        mTermuxTerminalSessionActivityClient.addNewSession(launchFailsafe, null);
-                    } catch (WindowManager.BadTokenException e) {
-                        // Activity finished - ignore.
+                    };
+
+                    if (TermuxInstaller.hasTermBoxAssets(TermuxActivity.this)) {
+                        Logger.logInfo(LOG_TAG, "TermBox offline runtime assets found in APK, installing...");
+                        TermuxInstaller.installTermBoxRuntime(TermuxActivity.this, launchSession);
+                    } else {
+                        Logger.logInfo(LOG_TAG, "No TermBox offline runtime assets bundled, continuing with bootstrap only.");
+                        launchSession.run();
                     }
                 });
             } else {

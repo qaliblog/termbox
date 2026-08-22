@@ -15,3 +15,8 @@ allprojects {
         maven { url "https://jitpack.io" }
     }
 }
+
+// TermBox offline mode property
+ext {
+    termboxOffline = project.hasProperty('termboxOffline') ? project.property('termboxOffline').toBoolean() : false
+}

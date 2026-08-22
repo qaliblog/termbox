@@ -1,0 +1,43 @@
+#!/bin/bash
+# termbox-host - Exit Ubuntu and return to native TermBox shell
+#
+# When called from inside the Ubuntu proot environment, this command
+# exits the proot session and drops the user back into the native
+# TermBox shell environment.
+#
+# Usage:
+#   termbox-host         - Exit to native TermBox shell
+#   termbox-host help    - Show help information
+#
+# Copyright (c) TermBox Contributors
+# SPDX-License-Identifier: MIT
+
+# Paths
+TERMBOX_APP_DIR="${ANDROID_DATA:-/data/data/com.qali.termbox}"
+TERMBOX_PREFIX="${TERMBOX_APP_DIR}/files/usr"
+
+if [ "${1:-}" = "help" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    echo "termbox-host - Exit Ubuntu to native TermBox shell"
+    echo ""
+    echo "Usage:"
+    echo "  termbox-host         Exit Ubuntu and return to TermBox shell"
+    echo "  termbox-host help    Show this help message"
+    echo ""
+    echo "From the native TermBox shell, you can re-enter Ubuntu with:"
+    echo "  termbox-ubuntu"
+    echo ""
+    echo "Or start a new Ubuntu session from the session menu."
+    exit 0
+fi
+
+# If we're inside proot, we need to exit it
+# Check if we're inside a proot environment
+if [ -d /proc/1/root ] && [ ! -e /system ] 2>/dev/null; then
+    # We're likely inside proot - exit to parent
+    echo "Exiting Ubuntu..."
+    # Send EOF to stdin to exit the proot shell
+    kill -9 $$ 2>/dev/null || exit 0
+fi
+
+# If we're not inside proot, just start a regular TermBox shell
+exec "${TERMBOX_PREFIX}/bin/bash" --login

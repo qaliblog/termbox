@@ -1,0 +1,55 @@
+{
+  "termbox_version": "0.1.0",
+  "termbox_environment_version": "1",
+  "components": {
+    "bootstrap": {
+      "version": "2026.02.12-r1+apt.android-7",
+      "variant": "apt-android-7",
+      "package_manager": "apt"
+    },
+    "proot": {
+      "version": "6.1.0",
+      "source": "termux-packages"
+    },
+    "proot-distro": {
+      "version": "5.7.0",
+      "source": "termux/proot-distro"
+    },
+    "ubuntu": {
+      "version": "22.04.5 LTS",
+      "codename": "jammy",
+      "variant": "minimal-cloudimg",
+      "architecture": "arm64"
+    },
+    "box64": {
+      "version": "0.4.4",
+      "source": "ptitSeb/box64",
+      "target_architecture": "aarch64",
+      "emulates": "x86_64"
+    },
+    "box86": {
+      "version": "0.3.6",
+      "source": "ptitSeb/box86",
+      "target_architecture": "arm",
+      "emulates": "x86",
+      "optional": true
+    }
+  },
+  "update_policy": {
+    "protect_user_data": true,
+    "protect_user_packages": true,
+    "update_only_changed": true,
+    "backup_before_update": true
+  },
+  "offline": {
+    "required_for_first_run": [
+      "bootstrap",
+      "proot",
+      "ubuntu",
+      "box64"
+    ],
+    "optional": [
+      "box86"
+    ]
+  }
+}

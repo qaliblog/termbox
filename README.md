@@ -1,19 +1,40 @@
-# Termux application
+# TermBox - Offline Linux Runtime for Android
 
-[![Build status](https://github.com/termux/termux-app/workflows/Build/badge.svg)](https://github.com/termux/termux-app/actions)
-[![Testing status](https://github.com/termux/termux-app/workflows/Unit%20tests/badge.svg)](https://github.com/termux/termux-app/actions)
-[![Join the chat at https://gitter.im/termux/termux](https://badges.gitter.im/termux/termux.svg)](https://gitter.im/termux/termux)
-[![Join the Termux discord server](https://img.shields.io/discord/641256914684084234.svg?label=&logo=discord&logoColor=ffffff&color=5865F2)](https://discord.gg/HXpF69X)
-[![Termux library releases at Jitpack](https://jitpack.io/v/termux/termux-app.svg)](https://jitpack.io/#termux/termux-app)
+> **Package:** `com.qali.termbox` | **App Name:** `termbox` | **Target:** ARM64 Android
 
+TermBox is a fully offline Linux runtime environment for Android, built on top of the [Termux](https://termux.dev) application. It bundles everything needed for offline operation:
 
-[Termux](https://termux.dev) is an Android terminal application and Linux environment.
+- **Termux Bootstrap** - Core shell environment
+- **proot-distro** - Distribution management
+- **Ubuntu ARM64 Rootfs** - Complete Ubuntu 22.04 environment
+- **Box64** - Transparent x86_64 execution on ARM64
+
+## Offline Build
+
+```bash
+# First build (downloads assets)
+./gradlew assembleRelease
+
+# Subsequent offline builds (no network required)
+./gradlew assembleRelease -PtermboxOffline=true
+
+# Prepare assets only
+./gradlew prepareTermBoxAssets
+
+# Clean downloaded assets
+./gradlew cleanTermBoxAssets
+
+# Print build summary
+./gradlew termboxBuildSummary
+```
+
+---
+
+**Based on [Termux](https://github.com/termux/termux-app)** - An Android terminal application and Linux environment.
 
 Note that this repository is for the app itself (the user interface and the terminal emulation). For the packages installable inside the app, see [termux/termux-packages](https://github.com/termux/termux-packages).
 
 Quick how-to about Termux package management is available at [Package Management](https://github.com/termux/termux-packages/wiki/Package-Management). It also has info on how to fix **`repository is under maintenance or down`** errors when running `apt` or `pkg` commands.
-
-**We are looking for Termux Android application maintainers.**
 
 ***
 

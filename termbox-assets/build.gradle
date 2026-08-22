@@ -342,10 +342,27 @@ task prepareTermBoxAssets {
                     }
                 }
 
+                // Exclude steam.c on Android - it uses glob()/globfree() which
+                // Android Bionic does not provide. Steam is not needed for TermBox.
+                def cmakeLists = new File(termboxBox64SourceDir, 'CMakeLists.txt')
+                if (cmakeLists.exists()) {
+                    def cmakeContent = cmakeLists.text
+                    // The upstream CMakeLists.txt includes steam.c when NOT STATICBUILD:
+                    //   if(NOT STATICBUILD)
+                    //     list(APPEND ELFLOADER_SRC ... "steam.c" ...)
+                    //   endif()
+                    // Change to: if(NOT STATICBUILD AND NOT ANDROID)
+                    if (cmakeContent.contains('"${BOX64_ROOT}/src/steam.c"') &&
+                        !cmakeContent.contains('NOT STATICBUILD AND NOT ANDROID')) {
+                        cmakeContent = cmakeContent.replace(
+                            'if(NOT STATICBUILD)',
+                            'if(NOT STATICBUILD AND NOT ANDROID)')
+                        cmakeLists.text = cmakeContent
+                        logger.quiet("  [box64] Excluded steam.c on Android (no Steam needed for TermBox)")
+                    }
+                }
+
                 // Build Box64 using upstream's own ANDROID+TERMUX configuration
-                // Box64 has explicit Android/Termux build support in CMakeLists.txt
-                // We use -DANDROID=ON and -DTERMUX=1 which enable upstream's own
-                // Android portability handling (no custom patches needed)
                 def buildDir = new File(termboxBuildDir, "box64")
                 buildDir.mkdirs()
 
@@ -361,8 +378,7 @@ task prepareTermBoxAssets {
                     "-DBAD_SIGNAL=ON",
                     "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                     "-DNOGIT=ON",
-                    "-DBOX32=OFF",
-                    "-DCMAKE_C_FLAGS=-D_GNU_SOURCE"
+                    "-DBOX32=OFF"
                 ].join(" ")
 
                 if (!execCommand("Configure Box64 CMake", "sh", "-c", "cd ${buildDir.absolutePath} && ${cmakeCmd}")) {

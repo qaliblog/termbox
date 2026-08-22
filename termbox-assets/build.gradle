@@ -342,66 +342,14 @@ task prepareTermBoxAssets {
                     }
                 }
 
-                // Apply Android compatibility patches
-                // Box64 uses several POSIX/GNU APIs not available in Android Bionic
-                logger.quiet("  [box64] Applying Android compatibility patches...")
-
-                // 1. Copy comprehensive compatibility headers into the source tree
-                def patchesDir = new File(termboxAssetsDir, 'patches')
-                def srcIncDir = new File(termboxBox64SourceDir, 'src')
-
-                // Copy android_compat.h (comprehensive compatibility layer)
-                def compatHeader = new File(patchesDir, 'android_compat.h')
-                if (compatHeader.exists()) {
-                    java.nio.file.Files.copy(compatHeader.toPath(),
-                        new File(srcIncDir, 'android_compat.h').toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    logger.quiet("  [box64] Copied android_compat.h")
-                }
-
-                // Copy android-glob-compat.h (glob/globfree)
-                def globHeader = new File(patchesDir, 'android-glob-compat.h')
-                if (globHeader.exists()) {
-                    java.nio.file.Files.copy(globHeader.toPath(),
-                        new File(srcIncDir, 'android-glob-compat.h').toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                    logger.quiet("  [box64] Copied android-glob-compat.h")
-                }
-
-                // 2. Patch src/wrapped/wrappedlibc.c to include android_compat.h on Android
-                // This provides: posix_spawn, semctl stubs, error functions, glob
-                def wrappedLibc = new File(termboxBox64SourceDir, 'src/wrapped/wrappedlibc.c')
-                if (wrappedLibc.exists()) {
-                    def content = wrappedLibc.text
-                    if (content.contains('#include <glob.h>') && !content.includes('android_compat')) {
-                        // Add android_compat.h early in the includes, before problematic headers
-                        // Find a good insertion point after the standard system includes
-                        def insertAfter = '#include <sys/wait.h>'
-                        def androidInclude = '\n#ifdef __ANDROID__\n#include "../android_compat.h"\n#endif'
-                        content = content.replace(insertAfter, insertAfter + androidInclude)
-                        wrappedLibc.text = content
-                        logger.quiet("  [box64] Patched src/wrapped/wrappedlibc.c to include android_compat.h")
-                    }
-                }
-
-                // 3. Patch src/steam.c to include android_compat.h on Android
-                def steamC = new File(termboxBox64SourceDir, 'src/steam.c')
-                if (steamC.exists()) {
-                    def content = steamC.text
-                    if (content.contains('#include <glob.h>') && !content.includes('android_compat')) {
-                        def insertAfter = '#include <errno.h>'
-                        def androidInclude = '\n#ifdef __ANDROID__\n#include "android_compat.h"\n#endif'
-                        content = content.replace(insertAfter, insertAfter + androidInclude)
-                        steamC.text = content
-                        logger.quiet("  [box64] Patched src/steam.c to include android_compat.h")
-                    }
-                }
-
-                // Build Box64
+                // Build Box64 using upstream's own ANDROID+TERMUX configuration
+                // Box64 has explicit Android/Termux build support in CMakeLists.txt
+                // We use -DANDROID=ON and -DTERMUX=1 which enable upstream's own
+                // Android portability handling (no custom patches needed)
                 def buildDir = new File(termboxBuildDir, "box64")
                 buildDir.mkdirs()
 
-                logger.quiet("  [box64] Configuring CMake for Android ARM64...")
+                logger.quiet("  [box64] Configuring CMake using upstream ANDROID+TERMUX mode...")
                 def cmakeCmd = [
                     "cmake",
                     "${termboxBox64SourceDir.absolutePath}",
@@ -413,7 +361,8 @@ task prepareTermBoxAssets {
                     "-DBAD_SIGNAL=ON",
                     "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                     "-DNOGIT=ON",
-                    "-DCMAKE_C_FLAGS=-D_GNU_SOURCE -I${termboxBox64SourceDir.absolutePath}/src"
+                    "-DBOX32=OFF",
+                    "-DCMAKE_C_FLAGS=-D_GNU_SOURCE"
                 ].join(" ")
 
                 if (!execCommand("Configure Box64 CMake", "sh", "-c", "cd ${buildDir.absolutePath} && ${cmakeCmd}")) {

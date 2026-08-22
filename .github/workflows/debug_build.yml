@@ -69,12 +69,11 @@ jobs:
           ASSETS_DIR="app/src/main/assets/termbox-runtime"
           ERRORS=0
 
-          # Check Bootstrap
+          # Check Bootstrap (handled by :app downloadBootstraps during assembleRelease)
           if [ -f "$ASSETS_DIR/bootstrap/aarch64.zip" ]; then
             echo "  Bootstrap:    PASS ($(du -h $ASSETS_DIR/bootstrap/aarch64.zip | cut -f1))"
           else
-            echo "  Bootstrap:    FAIL (missing)"
-            ERRORS=$((ERRORS + 1))
+            echo "  Bootstrap:    SKIP (built by :app during assembleRelease)"
           fi
 
           # Check proot-distro

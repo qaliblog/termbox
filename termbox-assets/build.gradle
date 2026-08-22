@@ -342,6 +342,27 @@ task prepareTermBoxAssets {
                     }
                 }
 
+                // Apply Android glob compatibility patch
+                // Android Bionic does not provide glob()/globfree(), which Box64 needs in src/steam.c
+                logger.quiet("  [box64] Applying Android glob compatibility patch...")
+                def steamC = new File(termboxBox64SourceDir, "src/steam.c")
+                if (steamC.exists()) {
+                    def content = steamC.text
+                    if (content.contains('#include <glob.h>') && !content.contains('android-glob-compat')) {
+                        // Copy the compatibility header into the source tree
+                        def compatHeader = new File(termboxAssetsDir, 'patches/android-glob-compat.h')
+                        if (compatHeader.exists()) {
+                            java.nio.file.Files.copy(compatHeader.toPath(),
+                                new File(termboxBox64SourceDir, "src/android-glob-compat.h").toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                            // Replace the include
+                            content = content.replace('#include <glob.h>', '#ifdef __ANDROID__\n#include "android-glob-compat.h"\n#else\n#include <glob.h>\n#endif')
+                            steamC.text = content
+                            logger.quiet("  [box64] Patched src/steam.c for Android glob compatibility")
+                        }
+                    }
+                }
+
                 // Build Box64
                 def buildDir = new File(termboxBuildDir, "box64")
                 buildDir.mkdirs()
@@ -398,8 +419,8 @@ task prepareTermBoxAssets {
                 assetsReady++
             }
         } catch (Exception e) {
-            logger.warn("  [box64] Warning: ${e.message}")
-            warnings << "box64: ${e.message}"
+            // Box64 is REQUIRED - fail the build if it cannot be built
+            throw new GradleException("Box64 build FAILED (required for TermBox offline runtime): ${e.message}", e)
         }
 
         // ========================================

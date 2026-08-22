@@ -49,25 +49,103 @@ jobs:
       - name: Prepare TermBox assets
         shell: bash {0}
         run: |
-          echo "Preparing TermBox offline runtime assets..."
+          echo "========================================="
+          echo "  TermBox Asset Preparation"
+          echo "========================================="
+          echo ""
+          echo "Assets:"
           echo "  - proot-distro: downloading from GitHub"
           echo "  - Ubuntu 24.04: building from Docker OCI image"
-          echo "  - Box64: building from source with Android NDK"
+          echo "  - Box64 v0.4.4: building from source with Android NDK"
+          echo ""
 
           # Show Docker version for debugging
           docker --version
+          echo ""
 
           # Show available NDK versions
           echo "Android NDK locations:"
           ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null || echo "  (checking other locations)"
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-
-          ./gradlew prepareTermBoxAssets --info 2>&1 | tail -50 || echo "Asset preparation completed with warnings (non-fatal)"
-
-          # Show what was prepared
           echo ""
-          echo "Prepared assets:"
-          find app/src/main/assets/termbox-runtime -type f 2>/dev/null | head -20 || echo "  (none)"
+
+          # Run asset preparation (Box64 is REQUIRED - build fails if it cannot be produced)
+          ./gradlew prepareTermBoxAssets --info
+
+      - name: Verify TermBox assets
+        shell: bash {0}
+        run: |
+          echo "========================================="
+          echo "  TermBox Asset Verification"
+          echo "========================================="
+          echo ""
+
+          ASSETS_DIR="app/src/main/assets/termbox-runtime"
+          ERRORS=0
+
+          # Check Bootstrap
+          if [ -f "$ASSETS_DIR/bootstrap/aarch64.zip" ]; then
+            echo "  Bootstrap:    PASS ($(du -h $ASSETS_DIR/bootstrap/aarch64.zip | cut -f1))"
+          else
+            echo "  Bootstrap:    FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check proot-distro
+          if [ -d "$ASSETS_DIR/proot-distro" ]; then
+            FILECOUNT=$(find $ASSETS_DIR/proot-distro -type f | wc -l)
+            echo "  proot-distro: PASS ($FILECOUNT files)"
+          else
+            echo "  proot-distro: FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check Ubuntu rootfs
+          if [ -f "$ASSETS_DIR/ubuntu/ubuntu-24.04-arm64.tar.xz" ]; then
+            UBUNTU_SIZE=$(du -h $ASSETS_DIR/ubuntu/ubuntu-24.04-arm64.tar.xz | cut -f1)
+            echo "  Ubuntu ARM64: PASS ($UBUNTU_SIZE)"
+          else
+            echo "  Ubuntu ARM64: FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check Box64
+          if [ -f "$ASSETS_DIR/box64/box64" ]; then
+            BOX64_SIZE=$(du -h $ASSETS_DIR/box64/box64 | cut -f1)
+            BOX64_TYPE=$(file $ASSETS_DIR/box64/box64)
+            echo "  Box64 ARM64:  PASS ($BOX64_SIZE)"
+            echo "               $BOX64_TYPE"
+
+            # Verify it's actually ARM64, not x86_64
+            if echo "$BOX64_TYPE" | grep -qi "aarch64\|ARM aarch64"; then
+              echo "               Architecture: VERIFIED (AArch64)"
+            else
+              echo "  Box64 ARM64:  FAIL (wrong architecture!)")
+              ERRORS=$((ERRORS + 1))
+            fi
+          else
+            echo "  Box64 ARM64:  FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check Box64 version
+          if [ -f "$ASSETS_DIR/box64/box64" ] && [ -x "$ASSETS_DIR/box64/box64" ]; then
+            echo ""
+            echo "  Box64 --version:"
+            # Can't execute ARM64 binary on x86 runner, but we can check it's a real binary
+            readelf -h $ASSETS_DIR/box64/box64 2>/dev/null | grep -E "Machine:|Class:|Type:" || echo "  (readelf not available, file check above is sufficient)"
+          fi
+
+          echo ""
+          echo "========================================="
+          if [ $ERRORS -gt 0 ]; then
+            echo "  RESULT: FAILED ($ERRORS error(s))"
+            echo "========================================="
+            exit 1
+          else
+            echo "  RESULT: ALL ASSETS VERIFIED"
+            echo "========================================="
+          fi
 
       - name: Build release APKs
         shell: bash {0}

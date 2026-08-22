@@ -1,6 +1,6 @@
 {
   "_comment": "TermBox Asset Manifest - Verified upstream sources with pinned versions",
-  "_schema_version": "1.1.0",
+  "_schema_version": "1.2.0",
 
   "bootstrap": {
     "description": "Termux bootstrap packages for the TermBox prefix",
@@ -56,25 +56,21 @@
   },
 
   "box64": {
-    "description": "Box64 - Linux userspace x86_64 emulator for ARM64, built from source for Android",
-    "version": "0.4.4",
-    "commit": null,
-    "source": "https://github.com/ptitSeb/box64",
-    "release": "https://github.com/ptitSeb/box64/releases/tag/v0.4.4",
-    "build_method": "cmake_android_ndk",
-    "cmake_options": {
-      "ANDROID": "ON",
-      "ARM_DYNAREC": "ON",
-      "BAD_SIGNAL": "ON",
-      "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-      "NOGIT": "ON"
-    },
-    "target_abi": "arm64-v8a",
-    "target_platform": "android-24",
+    "description": "Box64 - Linux userspace x86_64 emulator for ARM64, prebuilt for glibc (runs inside Ubuntu proot rootfs)",
+    "version": "0.4.3+20260720.f79babc-1",
+    "source": "https://ryanfortner.github.io/box64-debs/",
+    "source_repo": "https://github.com/ryanfortner/box64-debs",
+    "build_method": "prebuilt_deb",
+    "deb_url": "https://ryanfortner.github.io/box64-debs/debian/box64-android_0.4.3+20260720.f79babc-1_arm64.deb",
+    "deb_filename": "box64-android_0.4.3+20260720.f79babc-1_arm64.deb",
+    "deb_sha256": "34dd68415936117af61ea457375ff0b4ab42204111fe3b3c33e043d589d020dd",
+    "deb_size_bytes": 10250800,
+    "binary_path_in_deb": "usr/local/bin/box64",
+    "target_abi": "arm64",
+    "notes": "Prebuilt glibc-linked Box64 from ryanfortner/box64-debs. Built with -DBAD_SIGNAL=ON for Android compatibility. This is a glibc binary that runs inside the Ubuntu proot rootfs, NOT inside Termux/Bionic directly.",
     "required_for_offline": true,
     "license": "MIT",
-    "license_url": "https://github.com/ptitSeb/box64/blob/main/LICENSE",
-    "notes": "Must be cross-compiled from source using Android NDK. No pre-built Android binary exists upstream."
+    "license_url": "https://github.com/ptitSeb/box64/blob/main/LICENSE"
   },
 
   "termbox-config": {

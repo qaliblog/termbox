@@ -38,14 +38,6 @@ jobs:
           restore-keys: |
             termbox-assets-${{ runner.os }}-
 
-      - name: Cache Box64 build
-        uses: actions/cache@v4
-        with:
-          path: |
-            build/termbox-assets/box64-source
-            build/termbox-assets/build/box64
-          key: box64-v0.4.4-${{ runner.os }}-android-ndk
-
       - name: Prepare TermBox assets
         shell: bash {0}
         run: |
@@ -56,29 +48,11 @@ jobs:
           echo "Assets:"
           echo "  - proot-distro: downloading from GitHub"
           echo "  - Ubuntu 24.04: building from Docker OCI image"
-          echo "  - Box64 v0.4.4: building from source with Android NDK"
+          echo "  - Box64: downloading prebuilt glibc ARM64 binary"
           echo ""
 
           # Show Docker version for debugging
           docker --version
-          echo ""
-
-          # Show available NDK versions
-          echo "Android NDK locations:"
-          ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null || echo "  (checking other locations)"
-          echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
-          echo ""
-          # Show NDK sysroot headers for debugging
-          NDK_DIR=$(ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null | head -1)
-          if [ -n "$NDK_DIR" ]; then
-            echo "NDK version: $NDK_DIR"
-            echo "Checking for posix_spawn.h in NDK:"
-            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'spawn.h' 2>/dev/null | head -5
-            echo "Checking for sem.h in NDK:"
-            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'sem.h' 2>/dev/null | head -5
-            echo "Checking for error.h in NDK:"
-            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'error.h' 2>/dev/null | head -5
-          fi
           echo ""
 
           # Run asset preparation (Box64 is REQUIRED - build fails if it cannot be produced)

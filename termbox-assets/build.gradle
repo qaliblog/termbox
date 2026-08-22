@@ -7,7 +7,7 @@
  *   - Bootstrap: Termux bootstrap packages (already built by downloadBootstraps in :app)
  *   - proot-distro: Termux proot-distro scripts
  *   - Ubuntu 24.04 ARM64: Extracted from official Docker OCI image
- *   - Box64: Built from source using Android NDK cross-compilation
+ *   - Box64: Prebuilt glibc ARM64 binary from ryanfortner/box64-debs (runs inside Ubuntu proot)
  *
  * Tasks:
  *   prepareTermBoxAssets - Download/build and prepare all assets for the APK
@@ -42,8 +42,7 @@ ext {
     // APK asset destination (inside app module)
     termboxApkAssetsDir = new File(project.rootDir, 'app/src/main/assets/termbox-runtime')
 
-    // Box64 source cache
-    termboxBox64SourceDir = new File(termboxCacheDir, 'box64-source')
+
 }
 
 /**
@@ -288,7 +287,7 @@ task prepareTermBoxAssets {
         }
 
         // ========================================
-        // 3. BOX64 (built from source with Android NDK)
+        // 3. BOX64 (prebuilt glibc ARM64 from ryanfortner/box64-debs)
         // ========================================
         logger.quiet("\n--- Preparing Box64 ---")
         def box64 = manifest.box64
@@ -301,105 +300,64 @@ task prepareTermBoxAssets {
             } else if (termboxOffline) {
                 throw new GradleException("Box64 binary missing and offline mode enabled")
             } else {
-                // Find Android NDK
-                def ndkDir = System.getenv("ANDROID_NDK_HOME") ?: System.getenv("ANDROID_NDK")
-                if (!ndkDir) {
-                    // Try common locations
-                    def candidates = [
-                        "/usr/local/lib/android/sdk/ndk",
-                        System.getProperty("user.home") + "/Android/Sdk/ndk",
-                        "/opt/android/ndk"
-                    ]
-                    for (candidate in candidates) {
-                        def ndkBase = new File(candidate)
-                        if (ndkBase.exists()) {
-                            def versions = ndkBase.listFiles()?.sort { it.name }?.reverse()
-                            if (versions?.length > 0) {
-                                ndkDir = versions[0].absolutePath
-                                break
-                            }
-                        }
-                    }
-                }
-                if (!ndkDir) {
-                    throw new GradleException("Android NDK not found. Set ANDROID_NDK_HOME or install the NDK.")
+                // Download prebuilt Box64 .deb from ryanfortner/box64-debs
+                // This is a glibc-linked ARM64 binary that runs inside the Ubuntu proot rootfs.
+                logger.quiet("  [box64] Downloading prebuilt glibc Box64 from APT repo...")
+                def debFile = new File(termboxDownloadsDir, box64.deb_filename)
+                if (!downloadAsset("box64-deb", box64.deb_url, box64.deb_sha256, debFile, termboxOffline)) {
+                    throw new GradleException("Failed to download Box64 .deb")
                 }
 
-                def toolchainFile = new File(ndkDir, "build/cmake/android.toolchain.cmake")
-                if (!toolchainFile.exists()) {
-                    throw new GradleException("Android NDK toolchain file not found at: ${toolchainFile.absolutePath}")
-                }
-                logger.quiet("  [box64] Using NDK: ${ndkDir}")
+                // Extract the .deb: it's an 'ar' archive containing data.tar.xz
+                def extractDir = new File(termboxExtractedDir, 'box64-deb')
+                if (extractDir.exists()) extractDir.deleteDir()
+                extractDir.mkdirs()
 
-                // Clone Box64 if not cached
-                if (!termboxBox64SourceDir.exists() || !new File(termboxBox64SourceDir, ".git").exists()) {
-                    logger.quiet("  [box64] Cloning Box64 v${box64.version}...")
-                    termboxBox64SourceDir.mkdirs()
-                    if (!execCommand("Clone Box64",
-                        "git", "clone", "--depth=1", "--branch", "v${box64.version}",
-                        box64.source, termboxBox64SourceDir.absolutePath)) {
-                        throw new GradleException("Failed to clone Box64")
+                logger.quiet("  [box64] Extracting .deb archive...")
+                // ar x to get data.tar.xz
+                if (!execCommand("Extract .deb",
+                    "sh", "-c", "ar -x ${debFile.absolutePath} --output=${extractDir.absolutePath}")) {
+                    throw new GradleException("Failed to extract .deb (is 'ar' available?)")
+                }
+
+                def dataTar = new File(extractDir, 'data.tar.xz')
+                if (!dataTar.exists()) {
+                    // Some .debs use data.tar.zst or data.tar.gz
+                    dataTar = new File(extractDir, 'data.tar.zst') ?: new File(extractDir, 'data.tar.gz')
+                    if (!dataTar.exists()) {
+                        throw new GradleException("data.tar.* not found in .deb. Contents: ${extractDir.listFiles()?.collect { it.name }?.join(', ')}")
                     }
                 }
 
-                // Verify upstream steam.c already has #include <glob.h>
-                def steamC = new File(termboxBox64SourceDir, 'src/steam.c')
-                if (steamC.exists()) {
-                    def grepCheck = ["grep", "-c", "#include <glob.h>", steamC.absolutePath].execute()
-                    def grepOutput = new StringBuilder()
-                    grepCheck.consumeProcessOutput(grepOutput, new StringBuilder())
-                    grepCheck.waitFor()
-                    if (grepOutput.toString().trim() == "0") {
-                        throw new GradleException("Box64 steam.c is missing #include <glob.h>")
+                logger.quiet("  [box64] Extracting data archive: ${dataTar.name}")
+                def dataDir = new File(extractDir, 'data')
+                dataDir.mkdirs()
+                def tarExt = dataTar.name.endsWith('.xz') ? 'J' : (dataTar.name.endsWith('.zst') ? '--zstd' : 'z')
+                if (!execCommand("Extract data archive",
+                    "sh", "-c", "tar -x${tarExt}f ${dataTar.absolutePath} -C ${dataDir.absolutePath}")) {
+                    throw new GradleException("Failed to extract data archive")
+                }
+
+                // Find the box64 binary
+                def binaryPath = box64.binary_path_in_deb ?: 'usr/local/bin/box64'
+                def extractedBinary = new File(dataDir, binaryPath)
+                if (!extractedBinary.exists()) {
+                    // Search for it
+                    def findResult = ["find", dataDir.absolutePath, "-name", "box64", "-type", "f"].execute()
+                    def findOutput = new StringBuilder()
+                    findResult.consumeProcessOutput(findOutput, new StringBuilder())
+                    findResult.waitFor()
+                    def found = findOutput.toString().trim().split('\n')
+                    if (found.length > 0 && found[0]) {
+                        extractedBinary = new File(found[0])
+                    } else {
+                        throw new GradleException("Box64 binary not found in extracted .deb")
                     }
-                    logger.quiet("  [box64] Verified steam.c includes <glob.h>")
                 }
+                logger.quiet("  [box64] Found binary: ${extractedBinary.absolutePath}")
 
-                // Clean previous Box64 build directory to avoid stale CMake state
-                def buildDir = new File(termboxBuildDir, "box64")
-                if (buildDir.exists()) {
-                    buildDir.deleteDir()
-                    logger.quiet("  [box64] Cleaned previous build directory")
-                }
-                buildDir.mkdirs()
-
-                // Build Box64 using upstream's own ANDROID+TERMUX configuration
-                // NOTE: ANDROID_PLATFORM=android-28 is required because Android Bionic
-                // only provides glob()/globfree() (used by src/steam.c) starting at API 28.
-                logger.quiet("  [box64] Configuring CMake using upstream ANDROID+TERMUX mode...")
-                def cmakeCmd = [
-                    "cmake",
-                    "${termboxBox64SourceDir.absolutePath}",
-                    "-DCMAKE_TOOLCHAIN_FILE=${toolchainFile.absolutePath}",
-                    "-DANDROID_ABI=arm64-v8a",
-                    "-DANDROID_PLATFORM=android-28",
-                    "-DTERMUX=1",
-                    "-DARM_DYNAREC=ON",
-                    "-DBAD_SIGNAL=ON",
-                    "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
-                    "-DNOGIT=ON",
-                    "-DBOX32=OFF"
-                ].join(" ")
-
-                if (!execCommand("Configure Box64 CMake", "sh", "-c", "cd ${buildDir.absolutePath} && ${cmakeCmd}")) {
-                    throw new GradleException("Failed to configure Box64 CMake")
-                }
-
-                logger.quiet("  [box64] Building Box64 (this may take several minutes)...")
-                def nproc = Runtime.getRuntime().availableProcessors()
-                if (!execCommand("Build Box64", "sh", "-c",
-                    "cd ${buildDir.absolutePath} && make -j${Math.min(nproc, 4)}")) {
-                    throw new GradleException("Failed to build Box64")
-                }
-
-                // Find the built binary
-                def builtBox64 = new File(buildDir, "box64")
-                if (!builtBox64.exists()) {
-                    throw new GradleException("Box64 binary not found at: ${builtBox64.absolutePath}")
-                }
-
-                // Verify it's ARM64
-                def fileCmd = "file ${builtBox64.absolutePath}"
+                // Verify it's ARM64 glibc (NOT Bionic)
+                def fileCmd = "file ${extractedBinary.absolutePath}"
                 def fileProcess = fileCmd.execute()
                 def fileOutput = new StringBuilder()
                 fileProcess.consumeProcessOutput(fileOutput, new StringBuilder())
@@ -407,15 +365,18 @@ task prepareTermBoxAssets {
                 def fileType = fileOutput.toString().trim()
                 logger.quiet("  [box64] Binary type: ${fileType}")
 
-                if (!fileType.contains("ARM aarch64") && !fileType.contains("aarch64")) {
+                if (!fileType.contains("aarch64") && !fileType.contains("ARM aarch64")) {
                     throw new GradleException("Box64 binary is not ARM64! Got: ${fileType}")
+                }
+                if (!fileType.contains("dynamically linked") || !fileType.contains("libc.so")) {
+                    logger.quiet("  [box64] WARNING: Expected glibc-linked binary. Type: ${fileType}")
                 }
 
                 // Copy to APK assets
                 box64Binary.parentFile.mkdirs()
-                java.nio.file.Files.copy(builtBox64.toPath(), box64Binary.toPath(),
+                java.nio.file.Files.copy(extractedBinary.toPath(), box64Binary.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                logger.quiet("  [box64] READY (v${box64.version}, ARM64, ${box64Binary.length()} bytes)")
+                logger.quiet("  [box64] READY (v${box64.version}, ARM64 glibc, ${box64Binary.length()} bytes)")
                 assetsReady++
             }
         } catch (Exception e) {
@@ -538,7 +499,7 @@ task termboxBuildSummary {
         logger.quiet("  Bootstrap:      ${bootstrapReady ? 'READY' : 'MISSING'}")
         logger.quiet("  proot-distro:   ${prootDistroReady ? 'READY' : 'MISSING'}")
         logger.quiet("  Ubuntu 24.04:   ${ubuntuReady ? 'READY' : 'MISSING'}")
-        logger.quiet("  Box64:          ${box64Ready ? 'READY' : 'MISSING (needs build from source)'}")
+        logger.quiet("  Box64:          ${box64Ready ? 'READY (glibc)' : 'MISSING'}")
         logger.quiet("  x86_64 fallback: ENABLED\n")
 
         def assetsDir = termboxDownloadsDir

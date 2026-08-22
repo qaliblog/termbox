@@ -19,10 +19,8 @@ ext {
 android {
     // namespace controls the R class and BuildConfig package - keep as com.termux for source compatibility
     namespace "com.termux"
-    // applicationId is the Android package name visible to the Play Store and the system
-    applicationId project.ext.termboxPackageName
 
-    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    compileSdk project.properties.compileSdkVersion.toInteger()
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
     def appVersionName = System.getenv("TERMUX_APP_VERSION_NAME") ?: ""
     def apkVersionTag = System.getenv("TERMUX_APK_VERSION_TAG") ?: ""
@@ -48,6 +46,9 @@ android {
     }
 
     defaultConfig {
+        // applicationId is the Android package name visible to the Play Store and the system
+        applicationId project.ext.termboxPackageName
+
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         versionCode 118

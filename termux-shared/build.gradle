@@ -4,7 +4,7 @@ apply plugin: 'maven-publish'
 android {
     namespace = "com.termux.shared"
 
-    compileSdkVersion project.properties.compileSdkVersion.toInteger()
+    compileSdk project.properties.compileSdkVersion.toInteger()
     ndkVersion = System.getenv("JITPACK_NDK_VERSION") ?: project.properties.ndkVersion
 
     dependencies {
@@ -32,7 +32,7 @@ android {
     }
 
     defaultConfig {
-        compileSdkVersion project.properties.compileSdkVersion.toInteger()
+        // compileSdk is set at android block level
         minSdkVersion project.properties.minSdkVersion.toInteger()
         targetSdkVersion project.properties.targetSdkVersion.toInteger()
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"

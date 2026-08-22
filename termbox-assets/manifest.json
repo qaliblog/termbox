@@ -42,27 +42,11 @@
     "extract_to": "bootstrap/"
   },
 
-  "proot": {
-    "description": "PRoot binary for user-space chroot/proot emulation",
-    "version": "6.1.0",
-    "url": "https://github.com/termux/termux-packages/releases/download/proot-6.1.0/proot-aarch64.tar.xz",
-    "sha256": "PLACEHOLDER_PROOT_SHA256_TO_BE_VERIFIED",
-    "filename": "proot-aarch64.tar.xz",
-    "architecture": "aarch64",
-    "compression": "tar.xz",
-    "required_for_offline": true,
-    "license": "GPL-2.0",
-    "license_url": "https://github.com/termux/termux-packages/blob/master/packages/proot/build.sh",
-    "source": "https://github.com/termux/termux-packages",
-    "destination": "proot/proot-aarch64",
-    "extract_to": "proot/"
-  },
-
   "proot-distro": {
     "description": "proot-distro - utility for managing proot distributions",
     "version": "5.7.0",
     "url": "https://github.com/termux/proot-distro/archive/refs/tags/v5.7.0.tar.gz",
-    "sha256": "PLACEHOLDER_PROOT_DISTRO_SHA256_TO_BE_VERIFIED",
+    "sha256": null,
     "filename": "proot-distro-5.7.0.tar.gz",
     "architecture": "all",
     "compression": "tar.gz",
@@ -70,65 +54,40 @@
     "license": "MIT",
     "license_url": "https://github.com/termux/proot-distro/blob/master/LICENSE",
     "source": "https://github.com/termux/proot-distro",
-    "destination": "proot-distro/proot-distro-5.7.0.tar.gz",
-    "extract_to": "proot-distro/",
-    "install_files": [
-      "proot_distro/",
-      "proot-distro.py",
-      "LICENSE"
-    ]
+    "destination": "proot-distro/",
+    "extract_to": "proot-distro/"
   },
 
   "ubuntu": {
-    "description": "Ubuntu ARM64 minimal rootfs for proot-distro",
+    "description": "Ubuntu ARM64 minimal rootfs for proot-distro (optional - enables offline Ubuntu)",
     "version": "22.04.5 LTS (Jammy Jellyfish)",
     "url": "https://cloud-images.ubuntu.com/minimal/releases/jammy/release/ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
-    "sha256": "PLACEHOLDER_UBUNTU_ROOTFS_SHA256_TO_BE_VERIFIED",
+    "sha256": null,
     "filename": "ubuntu-22.04-minimal-cloudimg-arm64-root.tar.xz",
     "architecture": "arm64",
     "compression": "tar.xz",
-    "required_for_offline": true,
+    "required_for_offline": false,
     "license": "CC-BY-SA 4.0",
     "license_url": "https://ubuntu.com/legal/intellectual-property-policy",
     "source": "https://cloud-images.ubuntu.com",
-    "destination": "ubuntu/ubuntu-22.04-arm64-root.tar.xz",
-    "extract_to": "ubuntu/",
+    "destination": "ubuntu/",
     "proot_distro_name": "ubuntu",
-    "expected_first_inode": 1048576
+    "notes": "Optional: large download (~30MB). Enables offline Ubuntu ARM64 environment."
   },
 
   "box64": {
-    "description": "Box64 - Linux userspace x86_64 emulator targeting ARM64",
+    "description": "Box64 - Linux userspace x86_64 emulator (optional - must be built from source for Android)",
     "version": "0.4.4",
-    "url": "https://github.com/ptitSeb/box64/releases/download/v0.4.4/box64-android-arm64.tar.xz",
-    "sha256": "PLACEHOLDER_BOX64_SHA256_TO_BE_VERIFIED",
-    "filename": "box64-android-arm64.tar.xz",
+    "url": null,
+    "sha256": null,
+    "filename": null,
     "architecture": "aarch64",
-    "compression": "tar.xz",
-    "required_for_offline": true,
+    "compression": null,
+    "required_for_offline": false,
     "license": "MIT",
     "license_url": "https://github.com/ptitSeb/box64/blob/main/LICENSE",
     "source": "https://github.com/ptitSeb/box64",
-    "destination": "box64/box64",
-    "extract_to": "box64/",
-    "notes": "Must be compiled for Android ARM64 with proper system call handling. Standard Linux ARM64 builds may not work on Android due to Bionic libc differences."
-  },
-
-  "box86": {
-    "description": "Box86 - Linux userspace x86 emulator targeting ARM (32-bit fallback)",
-    "version": "0.3.6",
-    "url": "https://github.com/ptitSeb/box86/releases/download/v0.3.6/box86-android-arm.tar.xz",
-    "sha256": "PLACEHOLDER_BOX86_SHA256_TO_BE_VERIFIED",
-    "filename": "box86-android-arm.tar.xz",
-    "architecture": "arm",
-    "compression": "tar.xz",
-    "required_for_offline": false,
-    "license": "MIT",
-    "license_url": "https://github.com/ptitSeb/box86/blob/master/LICENSE",
-    "source": "https://github.com/ptitSeb/box86",
-    "destination": "box86/box86",
-    "extract_to": "box86/",
-    "notes": "Optional - provides x86 (32-bit) support. Only needed if running 32-bit x86 binaries."
+    "notes": "Optional: Box64 must be cross-compiled from source for Android ARM64. No pre-built binary is available. Build with Android NDK and place the binary at box64/box64 in the APK assets."
   },
 
   "termbox-config": {
@@ -144,12 +103,6 @@
     "license_url": null,
     "source": "local",
     "destination": "config/",
-    "extract_to": "config/",
-    "files": [
-      "termbox-ubuntu.sh",
-      "termbox-env.sh",
-      "termbox-elf-wrapper.sh",
-      "termbox-version.json"
-    ]
+    "extract_to": "config/"
   }
 }

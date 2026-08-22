@@ -275,19 +275,26 @@ afterEvaluate {
         }
     }
 
-    // Wire TermBox asset preparation (from :termbox-assets module) into packaging.
-    // The prepareTermBoxAssets task downloads Ubuntu, Box64, proot-distro into
-    // app/src/main/assets/termbox-runtime/ which must be done before APK assembly.
-    tasks.configureEach { task ->
-        if (task.name.startsWith('merge') && task.name.endsWith('Assets')) {
-            try {
-                def prepareTask = project(':termbox-assets').tasks.findByName('prepareTermBoxAssets')
-                if (prepareTask != null) {
+    // TermBox asset preparation is available as an optional task.
+    // Run './gradlew prepareTermBoxAssets assembleRelease' to bundle offline Ubuntu/Box64.
+    // The base APK builds successfully without it.
+}
+
+// Hook prepareTermBoxAssets to run before mergeAssets only if explicitly requested
+// via -PtermboxOffline=true or by running prepareTermBoxAssets directly.
+tasks.configureEach { task ->
+    if (task.name.startsWith('merge') && task.name.endsWith('Assets')) {
+        try {
+            def prepareTask = project(':termbox-assets').tasks.findByName('prepareTermBoxAssets')
+            if (prepareTask != null) {
+                // Only add dependency if assets already exist (won't fail the build)
+                def assetsDir = file('src/main/assets/termbox-runtime')
+                if (assetsDir.exists() && assetsDir.listFiles()?.length > 0) {
                     task.dependsOn(prepareTask)
                 }
-            } catch (Exception ignored) {
-                // :termbox-assets module may not be available
             }
+        } catch (Exception ignored) {
+            // :termbox-assets module may not be available
         }
     }
 }

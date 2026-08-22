@@ -457,52 +457,79 @@ final class TermuxInstaller {
                     // Note: proot binary is already provided by the Termux bootstrap packages.
                     // No need to extract it separately.
 
-                    // Extract Box64 binary
-                    extractAsset(context, TERMBOX_BOX64_DIR + "/box64",
-                        new File(filesDir, "usr/bin/box64"));
-
-                    // Extract proot-distro scripts
-                    extractAssetDirectory(context, TERMBOX_PROOT_DISTRO_DIR,
-                        new File(filesDir, "usr/share/proot-distro"));
-
-                    // Extract Ubuntu rootfs (large file - stored compressed)
-                    File ubuntuDir = new File(filesDir, "ubuntu-root");
-                    if (!ubuntuDir.exists()) {
-                        ubuntuDir.mkdirs();
-                        // The Ubuntu rootfs tar.xz is stored in assets and extracted on first run
-                        // This is done streaming to avoid loading the entire archive into RAM
-                        extractUbuntuRootfs(context, ubuntuDir);
+                    // Extract Box64 binary (non-fatal if missing)
+                    try {
+                        extractAsset(context, TERMBOX_BOX64_DIR + "/box64",
+                            new File(filesDir, "usr/bin/box64"));
+                        Logger.logInfo(LOG_TAG, "Box64 extracted successfully");
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "Box64 extraction failed (non-fatal): " + e.getMessage());
                     }
 
-                    // Extract TermBox configuration scripts
-                    extractAssetDirectory(context, TERMBOX_CONFIG_DIR,
-                        new File(filesDir, "usr/share/termbox/config"));
+                    // Extract proot-distro scripts (non-fatal if missing)
+                    try {
+                        extractAssetDirectory(context, TERMBOX_PROOT_DISTRO_DIR,
+                            new File(filesDir, "usr/share/proot-distro"));
+                        Logger.logInfo(LOG_TAG, "proot-distro extracted successfully");
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "proot-distro extraction failed (non-fatal): " + e.getMessage());
+                    }
+
+                    // Extract Ubuntu rootfs (large file - non-fatal if missing)
+                    File ubuntuDir = new File(filesDir, "ubuntu-root");
+                    if (!ubuntuDir.exists()) {
+                        try {
+                            ubuntuDir.mkdirs();
+                            extractUbuntuRootfs(context, ubuntuDir);
+                            Logger.logInfo(LOG_TAG, "Ubuntu rootfs extracted successfully");
+                        } catch (Exception e) {
+                            Logger.logError(LOG_TAG, "Ubuntu rootfs extraction failed (non-fatal): " + e.getMessage());
+                        }
+                    }
+
+                    // Extract TermBox configuration scripts (non-fatal)
+                    try {
+                        extractAssetDirectory(context, TERMBOX_CONFIG_DIR,
+                            new File(filesDir, "usr/share/termbox/config"));
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "Config extraction failed (non-fatal): " + e.getMessage());
+                    }
 
                     // Install TermBox shell scripts into $PREFIX/bin/
-                    // These are the entry points for Ubuntu auto-login and host shell access
-                    installTermBoxShellScripts(context, filesDir);
+                    try {
+                        installTermBoxShellScripts(context, filesDir);
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "Shell script installation failed (non-fatal): " + e.getMessage());
+                    }
 
                     // Set executable permissions on binaries
-                    // Note: proot permissions are already set by the Termux bootstrap.
                     setExecutable(new File(filesDir, "usr/bin/box64"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-ubuntu"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-host"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-shell-wrapper"));
                     setExecutable(new File(filesDir, "usr/bin/termbox-exec"));
 
-                    // Setup Box64 ELF detection wrapper
-                    setupElfWrapper(filesDir);
+                    // Setup Box64 ELF detection wrapper (non-fatal)
+                    try {
+                        setupElfWrapper(filesDir);
+                    } catch (Exception e) {
+                        Logger.logError(LOG_TAG, "ELF wrapper setup failed (non-fatal): " + e.getMessage());
+                    }
 
                     Logger.logInfo(LOG_TAG, "TermBox offline runtime installed successfully.");
 
-                    activity.runOnUiThread(whenDone);
-
                 } catch (Exception e) {
-                    Logger.logError(LOG_TAG, "TermBox runtime installation failed: " + e.getMessage());
+                    Logger.logError(LOG_TAG, "TermBox runtime installation failed (non-fatal): " + e.getMessage());
                     Logger.logStackTraceWithMessage(LOG_TAG, "Installation Error", e);
-                    showBootstrapErrorDialog(activity, whenDone,
-                        Logger.getStackTracesMarkdownString(null, Logger.getStackTracesStringArray(e)));
+                    // Do NOT call showBootstrapErrorDialog here - it deletes the entire prefix
+                    // directory including the bootstrap and libandroid-support.so. TermBox
+                    // offline features (Ubuntu, Box64) are optional; the native shell must
+                    // still work even if the offline runtime fails to install.
                 }
+
+                // ALWAYS launch the terminal session, even if offline runtime install failed.
+                // The native TermBox shell works fine with just the Termux bootstrap.
+                activity.runOnUiThread(whenDone);
             }
         }.start();
     }

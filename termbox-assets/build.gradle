@@ -342,31 +342,37 @@ task prepareTermBoxAssets {
                     }
                 }
 
-                // Fix steam.c: Android NDK provides <glob.h> but steam.c
-                // doesn't include it. Add the missing include.
+                // Verify upstream steam.c already has #include <glob.h>
                 def steamC = new File(termboxBox64SourceDir, 'src/steam.c')
                 if (steamC.exists()) {
-                    def content = steamC.text
-                    if (!content.contains('#include <glob.h>')) {
-                        content = content.replace(
-                            '#include <unistd.h>',
-                            '#include <unistd.h>\n#include <glob.h>')
-                        steamC.text = content
-                        logger.quiet("  [box64] Added #include <glob.h> to src/steam.c")
+                    def grepCheck = ["grep", "-c", "#include <glob.h>", steamC.absolutePath].execute()
+                    def grepOutput = new StringBuilder()
+                    grepCheck.consumeProcessOutput(grepOutput, new StringBuilder())
+                    grepCheck.waitFor()
+                    if (grepOutput.toString().trim() == "0") {
+                        throw new GradleException("Box64 steam.c is missing #include <glob.h>")
                     }
+                    logger.quiet("  [box64] Verified steam.c includes <glob.h>")
                 }
 
-                // Build Box64 using upstream's own ANDROID+TERMUX configuration
+                // Clean previous Box64 build directory to avoid stale CMake state
                 def buildDir = new File(termboxBuildDir, "box64")
+                if (buildDir.exists()) {
+                    buildDir.deleteDir()
+                    logger.quiet("  [box64] Cleaned previous build directory")
+                }
                 buildDir.mkdirs()
 
+                // Build Box64 using upstream's own ANDROID+TERMUX configuration
+                // NOTE: ANDROID_PLATFORM=android-28 is required because Android Bionic
+                // only provides glob()/globfree() (used by src/steam.c) starting at API 28.
                 logger.quiet("  [box64] Configuring CMake using upstream ANDROID+TERMUX mode...")
                 def cmakeCmd = [
                     "cmake",
                     "${termboxBox64SourceDir.absolutePath}",
                     "-DCMAKE_TOOLCHAIN_FILE=${toolchainFile.absolutePath}",
                     "-DANDROID_ABI=arm64-v8a",
-                    "-DANDROID_PLATFORM=android-24",
+                    "-DANDROID_PLATFORM=android-28",
                     "-DTERMUX=1",
                     "-DARM_DYNAREC=ON",
                     "-DBAD_SIGNAL=ON",

@@ -68,6 +68,18 @@ jobs:
           ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null || echo "  (checking other locations)"
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_HOME"
           echo ""
+          # Show NDK sysroot headers for debugging
+          NDK_DIR=$(ls /usr/local/lib/android/sdk/ndk/ 2>/dev/null | head -1)
+          if [ -n "$NDK_DIR" ]; then
+            echo "NDK version: $NDK_DIR"
+            echo "Checking for posix_spawn.h in NDK:"
+            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'spawn.h' 2>/dev/null | head -5
+            echo "Checking for sem.h in NDK:"
+            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'sem.h' 2>/dev/null | head -5
+            echo "Checking for error.h in NDK:"
+            find /usr/local/lib/android/sdk/ndk/$NDK_DIR -name 'error.h' 2>/dev/null | head -5
+          fi
+          echo ""
 
           # Run asset preparation (Box64 is REQUIRED - build fails if it cannot be produced)
           ./gradlew prepareTermBoxAssets --info
@@ -113,14 +125,16 @@ jobs:
           if [ -f "$ASSETS_DIR/box64/box64" ]; then
             BOX64_SIZE=$(du -h $ASSETS_DIR/box64/box64 | cut -f1)
             BOX64_TYPE=$(file $ASSETS_DIR/box64/box64)
+            BOX64_SHA256=$(sha256sum $ASSETS_DIR/box64/box64 | cut -d' ' -f1)
             echo "  Box64 ARM64:  PASS ($BOX64_SIZE)"
-            echo "               $BOX64_TYPE"
+            echo "               Type: $BOX64_TYPE"
+            echo "               SHA256: $BOX64_SHA256"
 
             # Verify it's actually ARM64, not x86_64
             if echo "$BOX64_TYPE" | grep -qi "aarch64\|ARM aarch64"; then
               echo "               Architecture: VERIFIED (AArch64)"
             else
-              echo "  Box64 ARM64:  FAIL (wrong architecture!)")
+              echo "  Box64 ARM64:  FAIL (wrong architecture!)"
               ERRORS=$((ERRORS + 1))
             fi
           else
@@ -128,12 +142,11 @@ jobs:
             ERRORS=$((ERRORS + 1))
           fi
 
-          # Check Box64 version
-          if [ -f "$ASSETS_DIR/box64/box64" ] && [ -x "$ASSETS_DIR/box64/box64" ]; then
+          # Check Box64 ELF details
+          if [ -f "$ASSETS_DIR/box64/box64" ] && command -v readelf &> /dev/null; then
             echo ""
-            echo "  Box64 --version:"
-            # Can't execute ARM64 binary on x86 runner, but we can check it's a real binary
-            readelf -h $ASSETS_DIR/box64/box64 2>/dev/null | grep -E "Machine:|Class:|Type:" || echo "  (readelf not available, file check above is sufficient)"
+            echo "  Box64 ELF details:"
+            readelf -h $ASSETS_DIR/box64/box64 2>/dev/null | grep -E "Machine:|Class:|Type:|Entry point" || echo "  (readelf check failed)"
           fi
 
           echo ""

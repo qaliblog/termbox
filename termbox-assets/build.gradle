@@ -368,61 +368,32 @@ task prepareTermBoxAssets {
                     logger.quiet("  [box64] Copied android-glob-compat.h")
                 }
 
-                // 2. Patch src/wrapped/wrappedlibc.c to use android_compat.h on Android
-                // This replaces: glob.h, spawn.h, sys/sem.h, error.h, sys/vfs.h, etc.
+                // 2. Patch src/wrapped/wrappedlibc.c to include android_compat.h on Android
+                // This provides: posix_spawn, semctl stubs, error functions, glob
                 def wrappedLibc = new File(termboxBox64SourceDir, 'src/wrapped/wrappedlibc.c')
                 if (wrappedLibc.exists()) {
                     def content = wrappedLibc.text
-                    if (content.contains('#include <glob.h>') && !content.contains('android_compat')) {
-                        // Add android_compat.h at the top of includes (after standard headers)
-                        // Replace the problematic includes with a single android_compat.h on Android
-                        def patchedContent = content
-
-                        // Replace glob.h include
-                        patchedContent = patchedContent.replace(
-                            '#include <glob.h>',
-                            '#ifdef __ANDROID__\n#include "../android_compat.h"\n#else\n#include <glob.h>\n#endif')
-
-                        // Replace spawn.h include
-                        patchedContent = patchedContent.replace(
-                            '#include <spawn.h>',
-                            '#ifndef __ANDROID__\n#include <spawn.h>\n#endif')
-
-                        // Replace sys/sem.h include
-                        patchedContent = patchedContent.replace(
-                            '#include <sys/sem.h>',
-                            '#ifndef __ANDROID__\n#include <sys/sem.h>\n#endif')
-
-                        // Replace sys/ipc.h include
-                        patchedContent = patchedContent.replace(
-                            '#include <sys/ipc.h>',
-                            '#ifndef __ANDROID__\n#include <sys/ipc.h>\n#endif')
-
-                        // Replace error.h include (GNU extension)
-                        patchedContent = patchedContent.replace(
-                            '#include <error.h>',
-                            '#ifndef __ANDROID__\n#include <error.h>\n#endif')
-
-                        // Replace sys/vfs.h include
-                        patchedContent = patchedContent.replace(
-                            '#include <sys/vfs.h>',
-                            '#ifndef __ANDROID__\n#include <sys/vfs.h>\n#endif')
-
-                        wrappedLibc.text = patchedContent
-                        logger.quiet("  [box64] Patched src/wrapped/wrappedlibc.c for Android compatibility")
+                    if (content.contains('#include <glob.h>') && !content.includes('android_compat')) {
+                        // Add android_compat.h early in the includes, before problematic headers
+                        // Find a good insertion point after the standard system includes
+                        def insertAfter = '#include <sys/wait.h>'
+                        def androidInclude = '\n#ifdef __ANDROID__\n#include "../android_compat.h"\n#endif'
+                        content = content.replace(insertAfter, insertAfter + androidInclude)
+                        wrappedLibc.text = content
+                        logger.quiet("  [box64] Patched src/wrapped/wrappedlibc.c to include android_compat.h")
                     }
                 }
 
-                // 3. Patch src/steam.c for glob compatibility
+                // 3. Patch src/steam.c to include android_compat.h on Android
                 def steamC = new File(termboxBox64SourceDir, 'src/steam.c')
                 if (steamC.exists()) {
                     def content = steamC.text
-                    if (content.contains('#include <glob.h>') && !content.contains('android_compat')) {
-                        content = content.replace(
-                            '#include <glob.h>',
-                            '#ifdef __ANDROID__\n#include "android_compat.h"\n#else\n#include <glob.h>\n#endif')
+                    if (content.contains('#include <glob.h>') && !content.includes('android_compat')) {
+                        def insertAfter = '#include <errno.h>'
+                        def androidInclude = '\n#ifdef __ANDROID__\n#include "android_compat.h"\n#endif'
+                        content = content.replace(insertAfter, insertAfter + androidInclude)
                         steamC.text = content
-                        logger.quiet("  [box64] Patched src/steam.c for Android compatibility")
+                        logger.quiet("  [box64] Patched src/steam.c to include android_compat.h")
                     }
                 }
 
@@ -442,7 +413,7 @@ task prepareTermBoxAssets {
                     "-DBAD_SIGNAL=ON",
                     "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
                     "-DNOGIT=ON",
-                    "-DCMAKE_C_FLAGS=-I${termboxBox64SourceDir.absolutePath}/src"
+                    "-DCMAKE_C_FLAGS=-D_GNU_SOURCE -I${termboxBox64SourceDir.absolutePath}/src"
                 ].join(" ")
 
                 if (!execCommand("Configure Box64 CMake", "sh", "-c", "cd ${buildDir.absolutePath} && ${cmakeCmd}")) {

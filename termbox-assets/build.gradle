@@ -332,9 +332,9 @@ task prepareTermBoxAssets {
                 logger.quiet("  [box64] Extracting data archive: ${dataTar.name}")
                 def dataDir = new File(extractDir, 'data')
                 dataDir.mkdirs()
-                def tarExt = dataTar.name.endsWith('.xz') ? 'J' : (dataTar.name.endsWith('.zst') ? '--zstd' : 'z')
+                // Use --auto-compress to let tar detect the compression format
                 if (!execCommand("Extract data archive",
-                    "sh", "-c", "tar -x${tarExt}f ${dataTar.absolutePath} -C ${dataDir.absolutePath}")) {
+                    "sh", "-c", "tar -xaf ${dataTar.absolutePath} -C ${dataDir.absolutePath}")) {
                     throw new GradleException("Failed to extract data archive")
                 }
 

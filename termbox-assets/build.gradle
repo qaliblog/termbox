@@ -436,12 +436,6 @@ task termboxBuildSummary {
     }
 }
 
-// Make assemble tasks depend on prepareTermBoxAssets
-afterEvaluate {
-    // Hook into all variant assemblies
-    tasks.configureEach { task ->
-        if (task.name.startsWith('assemble') && task.name != 'assembleTermBoxAssets') {
-            task.dependsOn prepareTermBoxAssets
-        }
-    }
-}
+// Note: The :app module wires its assemble/merge tasks to depend on
+// prepareTermBoxAssets via its own afterEvaluate block.
+// This module is standalone and does not need to reference :app tasks directly.

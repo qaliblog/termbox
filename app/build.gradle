@@ -255,6 +255,39 @@ task downloadBootstraps() {
 
 afterEvaluate {
     android.applicationVariants.all { variant ->
+        // Java compilation depends on bootstrap download
         variant.javaCompileProvider.get().dependsOn(downloadBootstraps)
+
+        // NDK build tasks also need the bootstrap zip in place
+        tasks.configureEach { task ->
+            if (task.name.startsWith('configureNdkBuild') &&
+                    task.name.contains(variant.name.capitalize())) {
+                task.dependsOn(downloadBootstraps)
+            }
+            if (task.name.startsWith('buildNdkBuild') &&
+                    task.name.contains(variant.name.capitalize())) {
+                task.dependsOn(downloadBootstraps)
+            }
+            if (task.name.startsWith('externalNativeBuild') &&
+                    task.name.contains(variant.name.capitalize())) {
+                task.dependsOn(downloadBootstraps)
+            }
+        }
+    }
+
+    // Wire TermBox asset preparation (from :termbox-assets module) into packaging.
+    // The prepareTermBoxAssets task downloads Ubuntu, Box64, proot-distro into
+    // app/src/main/assets/termbox-runtime/ which must be done before APK assembly.
+    tasks.configureEach { task ->
+        if (task.name.startsWith('merge') && task.name.endsWith('Assets')) {
+            try {
+                def prepareTask = project(':termbox-assets').tasks.findByName('prepareTermBoxAssets')
+                if (prepareTask != null) {
+                    task.dependsOn(prepareTask)
+                }
+            } catch (Exception ignored) {
+                // :termbox-assets module may not be available
+            }
+        }
     }
 }

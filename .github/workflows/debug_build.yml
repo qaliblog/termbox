@@ -38,6 +38,16 @@ jobs:
           restore-keys: |
             termbox-assets-${{ runner.os }}-
 
+      - name: Setup QEMU for ARM64 emulation
+        shell: bash {0}
+        run: |
+          echo "========================================="
+          echo "  QEMU ARM64 Setup"
+          echo "========================================="
+          docker run --privileged --rm --pull=always tonistiigi/binfmt --install arm64
+          echo "QEMU ARM64 emulation registered."
+          echo ""
+
       - name: Prepare TermBox assets
         shell: bash {0}
         run: |
@@ -47,7 +57,8 @@ jobs:
           echo ""
           echo "Assets:"
           echo "  - proot-distro: downloading from GitHub"
-          echo "  - Ubuntu 24.04: building from Docker OCI image"
+          echo "  - Ubuntu 24.04: downloading official ubuntu-base rootfs"
+          echo "  - Ubuntu 24.04: PRE-PROVISIONING (systemd, dbus, ca-certificates, locales)"
           echo "  - Box64: downloading prebuilt glibc ARM64 binary"
           echo ""
 
@@ -56,7 +67,8 @@ jobs:
           echo ""
 
           # Run asset preparation (Box64 is REQUIRED - build fails if it cannot be produced)
-          ./gradlew prepareTermBoxAssets --info
+          # provisionRootfs=true is now the default; explicitly pass it for clarity
+          ./gradlew prepareTermBoxAssets -PprovisionRootfs=true --info
 
       - name: Verify TermBox assets
         shell: bash {0}
@@ -85,12 +97,21 @@ jobs:
             ERRORS=$((ERRORS + 1))
           fi
 
-          # Check Ubuntu rootfs
-          if [ -f "$ASSETS_DIR/ubuntu/ubuntu-24.04-arm64.tar.xz" ]; then
-            UBUNTU_SIZE=$(du -h $ASSETS_DIR/ubuntu/ubuntu-24.04-arm64.tar.xz | cut -f1)
+          # Check Ubuntu rootfs (accepts .tar.gz or .tar.xz)
+          UBUNTU_FILE=$(ls $ASSETS_DIR/ubuntu/ubuntu-24.04-arm64.tar.* 2>/dev/null | head -1)
+          if [ -n "$UBUNTU_FILE" ]; then
+            UBUNTU_SIZE=$(du -h "$UBUNTU_FILE" | cut -f1)
             echo "  Ubuntu ARM64: PASS ($UBUNTU_SIZE)"
           else
             echo "  Ubuntu ARM64: FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
+          fi
+
+          # Check proot
+          if [ -f "$ASSETS_DIR/proot/bin/proot" ] && [ -f "$ASSETS_DIR/proot/lib/libandroid-shmem.so" ] && [ -f "$ASSETS_DIR/proot/lib/libtalloc.so.2" ]; then
+            echo "  proot:         PASS ($(file $ASSETS_DIR/proot/bin/proot | grep -o 'ELF 64-bit.*' | head -1))"
+          else
+            echo "  proot:         FAIL (missing binary or runtime libs)"
             ERRORS=$((ERRORS + 1))
           fi
 
@@ -120,6 +141,48 @@ jobs:
             echo ""
             echo "  Box64 ELF details:"
             readelf -h $ASSETS_DIR/box64/box64 2>/dev/null | grep -E "Machine:|Class:|Type:|Entry point" || echo "  (readelf check failed)"
+          fi
+
+          # Check Box64 transparent layer (on-disk x86_64 exec wrapping).
+          # termbox-x86_64-launcher replaces every x86_64 ELF on disk, termbox-scan64
+          # scans for x86_64 executables, termbox-wrapd keeps the wrap table fresh so
+          # binaries spawned by subprocesses (e.g. aapt2 under gradlew) get wrapped too.
+          # These replaced the legacy libbox64auto.so LD_PRELOAD interposer.
+          for LAYER_BIN in termbox-x86_64-launcher termbox-scan64 termbox-wrapd; do
+            LAYER_PATH="$ASSETS_DIR/box64/$LAYER_BIN"
+            if [ -f "$LAYER_PATH" ]; then
+              LAYER_TYPE=$(file "$LAYER_PATH")
+              echo "  $LAYER_BIN: PASS ($(du -h "$LAYER_PATH" | cut -f1))"
+              echo "               Type: $LAYER_TYPE"
+              if echo "$LAYER_TYPE" | grep -qi "aarch64\\|ARM aarch64"; then
+                echo "               Architecture: VERIFIED (AArch64)"
+              else
+                echo "  $LAYER_BIN:   FAIL (wrong architecture!)"
+                ERRORS=$((ERRORS + 1))
+              fi
+            else
+              echo "  $LAYER_BIN:   FAIL (missing)"
+              ERRORS=$((ERRORS + 1))
+            fi
+          done
+
+          # Check Box64 x86_64 libraries (glibc runtime for emulated binaries)
+          if [ -f "$ASSETS_DIR/box64-libs/box64-libs.tar.gz" ]; then
+            LIBS_SIZE=$(du -h $ASSETS_DIR/box64-libs/box64-libs.tar.gz | cut -f1)
+            echo "  box64-libs:   PASS ($LIBS_SIZE)"
+            if command -v tar &> /dev/null; then
+              HAS_LD=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib64/ld-linux-x86-64.so.2" || true)
+              HAS_LIBC=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib/x86_64-linux-gnu/libc.so.6" || true)
+              if [ "$HAS_LD" -gt 0 ] && [ "$HAS_LIBC" -gt 0 ]; then
+                echo "               Contents: VERIFIED (ld-linux + libc present)"
+              else
+                echo "  box64-libs:   FAIL (missing ld-linux-x86-64.so.2 or libc.so.6 in archive)"
+                ERRORS=$((ERRORS + 1))
+              fi
+            fi
+          else
+            echo "  box64-libs:   FAIL (missing)"
+            ERRORS=$((ERRORS + 1))
           fi
 
           echo ""

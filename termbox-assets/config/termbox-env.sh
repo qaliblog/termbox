@@ -22,13 +22,19 @@ export TMPDIR="${TERMBOX_PREFIX}/tmp"
 export TEMP="${TMPDIR}"
 export TMP="${TMPDIR}"
 
+# TLS certificates: the bootstrap binaries were compiled with the official
+# "com.termux" prefix hardcoded, so their compiled-in CA bundle path
+# (/data/data/com.termux/files/usr/etc/tls/cert.pem) is not readable by this
+# fork. Point curl/openssl at this fork's own CA bundle, otherwise HTTPS fails
+# with "error adding trust anchors" (curl exit 77).
+export CURL_CA_BUNDLE="${TERMBOX_PREFIX}/etc/tls/cert.pem"
+export SSL_CERT_FILE="${TERMBOX_PREFIX}/etc/tls/cert.pem"
+
 # Box64 configuration
 export BOX64_PATH="${TERMBOX_PREFIX}/bin/box64"
 export BOX64_DYNAREC=1
-export BOX64_DYNAREC_STRONGMEM=1
 export BOX64_DYNAREC_BIGBLOCK=1
 export BOX64_DYNAREC_SAFEFLAGS=1
-export BOX64_DYNAREC_BLEEDING_EDGE=1
 export BOX64_ENV=0
 export BOX64_LOG=0
 

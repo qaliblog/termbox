@@ -28,8 +28,9 @@ import java.security.MessageDigest
 import java.security.DigestInputStream
 
 // TermBox configuration
-ext {
+    ext {
     termboxOffline = project.hasProperty('termboxOffline') ? project.property('termboxOffline').toBoolean() : false
+    provisionRootfs = project.hasProperty('provisionRootfs') ? project.property('provisionRootfs').toBoolean() : true
 
     // Asset directories
     termboxAssetsDir = new File(project.rootDir, 'termbox-assets')
@@ -207,83 +208,232 @@ task prepareTermBoxAssets {
         }
 
         // ========================================
-        // 2. UBUNTU ARM64 ROOTFS (via Docker)
+        // 2. UBUNTU ARM64 ROOTFS (official ubuntu-base, direct download)
         // ========================================
         logger.quiet("\n--- Preparing Ubuntu 24.04 ARM64 Rootfs ---")
         def ubuntu = manifest.ubuntu
-        def ubuntuTar = new File(termboxDownloadsDir, "ubuntu-24.04-arm64.tar.xz")
+        def ubuntuTar = new File(termboxDownloadsDir, ubuntu.filename)
 
         try {
-            if (ubuntuTar.exists() && ubuntuTar.length() > 0) {
-                logger.quiet("  [ubuntu] Using cached rootfs: ${ubuntuTar.name} (${ubuntuTar.length()} bytes)")
-            } else if (termboxOffline) {
-                throw new GradleException("Ubuntu rootfs missing and offline mode enabled")
-            } else {
-                // Check if Docker is available
-                def dockerCheck = "which docker".execute()
-                dockerCheck.waitFor()
-                if (dockerCheck.exitValue() != 0) {
-                    throw new GradleException("Docker is required to build Ubuntu rootfs. Install Docker or place the rootfs at: ${ubuntuTar.absolutePath}")
-                }
-
-                def dockerImage = ubuntu.docker_image
-                def dockerPlatform = ubuntu.docker_platform
-
-                logger.quiet("  [ubuntu] Pulling Docker image: ${dockerImage} (platform: ${dockerPlatform})")
-                if (!execCommand("Pull Ubuntu Docker image",
-                    "docker", "pull", "--platform", dockerPlatform, dockerImage)) {
-                    throw new GradleException("Failed to pull Ubuntu Docker image")
-                }
-
-                // Create a container and export its rootfs
-                logger.quiet("  [ubuntu] Exporting rootfs from Docker container...")
-                def containerName = "termbox-ubuntu-rootfs-${System.currentTimeMillis()}"
-
-                // Create container
-                if (!execCommand("Create Ubuntu container",
-                    "docker", "create", "--name", containerName, dockerImage, "/bin/true")) {
-                    throw new GradleException("Failed to create Docker container")
-                }
-
-                try {
-                    // Export rootfs as tar, then compress to tar.xz
-                    def exportCmd = "docker export ${containerName} | xz -9 > ${ubuntuTar.absolutePath}"
-                    if (!execCommand("Export and compress Ubuntu rootfs", "sh", "-c", exportCmd)) {
-                        throw new GradleException("Failed to export Ubuntu rootfs")
-                    }
-
-                    // Verify architecture
-                    logger.quiet("  [ubuntu] Verifying ARM64 architecture...")
-                    def verifyCmd = "docker run --rm --platform ${dockerPlatform} ${dockerImage} uname -m"
-                    def verifyProcess = verifyCmd.execute()
-                    def verifyOutput = new StringBuilder()
-                    verifyProcess.consumeProcessOutput(verifyOutput, new StringBuilder())
-                    verifyProcess.waitFor()
-                    def arch = verifyOutput.toString().trim()
-                    if (arch != "aarch64") {
-                        throw new GradleException("Wrong architecture! Expected aarch64, got: ${arch}")
-                    }
-                    logger.quiet("  [ubuntu] Architecture verified: ${arch}")
-                } finally {
-                    // Clean up container
-                    "docker rm -f ${containerName}".execute().waitFor()
-                }
-            }
-
-            // Copy to APK assets
-            if (ubuntuTar.exists()) {
-                def apkUbuntu = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.xz")
+            if (downloadAsset("ubuntu", ubuntu.url, ubuntu.sha256, ubuntuTar, termboxOffline)) {
+                def apkUbuntu = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.gz")
                 apkUbuntu.parentFile.mkdirs()
-                if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuTar.length()) {
-                    java.nio.file.Files.copy(ubuntuTar.toPath(), apkUbuntu.toPath(),
-                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+                if (provisionRootfs && !termboxOffline) {
+                    // ---- PRE-PROVISIONED MODE ----
+                    // Check if the existing APK assets tarball is already provisioned.
+                    // A provisioned rootfs is significantly larger (~41MB) than the raw
+                    // ubuntu-base (~29MB) and contains the /etc/termbox-provisioned marker.
+                    boolean alreadyProvisioned = false
+                    if (apkUbuntu.exists()) {
+                        // Check for the marker inside the tarball
+                        try {
+                            def checkCmd = "tar -tzf ${apkUbuntu.absolutePath} 2>/dev/null | grep -c etc/termbox-provisioned"
+                            def proc = ["sh", "-c", checkCmd].execute()
+                            def output = new StringBuilder()
+                            proc.consumeProcessOutput(output, new StringBuilder())
+                            proc.waitFor()
+                            if (proc.exitValue() == 0 && output.toString().trim().toInteger() > 0) {
+                                alreadyProvisioned = true
+                                logger.quiet("  [ubuntu] APK assets already contain a provisioned rootfs (${apkUbuntu.length() / (1024*1024)} MB) - skipping re-provisioning.")
+                            }
+                        } catch (Exception ignored) { /* not provisioned or can't read */ }
+                    }
+
+                    if (alreadyProvisioned) {
+                        // Already provisioned - just use it as-is
+                        assetsReady++
+                    } else {
+                    // Extract the ubuntu-base tarball, run apt-get install inside Docker
+                    // with QEMU ARM64 emulation to pre-install systemd, dbus, ca-certificates,
+                    // locales. The result is a fully provisioned rootfs that needs no online
+                    // initialization at first launch.
+                    // Graceful fallback: if Docker/QEMU is unavailable, fall back to standard mode.
+                    boolean provisioned = false
+                    try {
+                        logger.quiet("  [ubuntu] Pre-provisioning rootfs (systemd, dbus, ca-certificates, locales)...")
+                        def provisionStaging = new File(termboxBuildDir, 'ubuntu-provisioned-staging')
+                        if (provisionStaging.exists()) provisionStaging.deleteDir()
+                        provisionStaging.mkdirs()
+
+                        // Extract ubuntu-base tarball
+                        logger.quiet("  [ubuntu] Extracting ubuntu-base to staging...")
+                        if (!execCommand("Extract ubuntu-base",
+                            "sh", "-c", "tar -xzf ${ubuntuTar.absolutePath} -C ${provisionStaging.absolutePath}")) {
+                            throw new GradleException("Failed to extract ubuntu-base tarball for provisioning")
+                        }
+
+                        // Run the provisioning script (Docker + QEMU ARM64 emulation)
+                        def provisionScript = new File(termboxAssetsDir, 'prebuilt/provision-rootfs.sh')
+                        if (!provisionScript.exists()) {
+                            throw new GradleException("Provisioning script not found: ${provisionScript.absolutePath}")
+                        }
+                        def provisionCmd = "bash ${provisionScript.absolutePath} ${provisionStaging.absolutePath}"
+                        logger.quiet("  [ubuntu] Running: ${provisionCmd}")
+                        if (!execCommand("Pre-provision Ubuntu rootfs",
+                            "sh", "-c", provisionCmd)) {
+                            throw new GradleException("Rootfs provisioning failed (is Docker with QEMU ARM64 available?)")
+                        }
+
+                        // Re-tar the provisioned rootfs
+                        logger.quiet("  [ubuntu] Re-tarring provisioned rootfs...")
+                        def provisionedTar = new File(termboxBuildDir, 'ubuntu-24.04-arm64-provisioned.tar.gz')
+                        if (provisionedTar.exists()) provisionedTar.delete()
+                        if (!execCommand("Pack provisioned rootfs",
+                            "sh", "-c", "tar -czf ${provisionedTar.absolutePath} --warning=failed-read -C ${provisionStaging.absolutePath} .")) {
+                            throw new GradleException("Failed to re-tar provisioned rootfs")
+                        }
+
+                        // Copy provisioned tarball to APK assets
+                        java.nio.file.Files.copy(provisionedTar.toPath(), apkUbuntu.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        logger.quiet("  [ubuntu] READY PRE-PROVISIONED (24.04 ARM64, ${apkUbuntu.length() / (1024*1024)} MB)")
+                        logger.quiet("  [ubuntu] Packages: systemd, dbus, ca-certificates, locales (bundled in rootfs)")
+                        provisioned = true
+                        assetsReady++
+
+                        // Clean up staging
+                        provisionStaging.deleteDir()
+                    } catch (Exception e) {
+                        logger.warn("  [ubuntu] Pre-provisioning failed: ${e.message}")
+                        logger.warn("  [ubuntu] Falling back to standard (un-provisioned) rootfs.")
+                        logger.warn("  [ubuntu] To fix: install Docker + QEMU ARM64 (docker run --privileged --rm tonistiigi/binfmt --install all)")
+                        warnings << "ubuntu pre-provisioning: ${e.message}"
+                    }
+
+                    if (!provisioned) {
+                        // Fall back: copy raw ubuntu-base tarball to APK assets
+                        if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuTar.length()) {
+                            java.nio.file.Files.copy(ubuntuTar.toPath(), apkUbuntu.toPath(),
+                                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                        }
+                        logger.quiet("  [ubuntu] READY (24.04 ARM64, STANDARD MODE, ${ubuntuTar.length() / (1024*1024)} MB)")
+                        assetsReady++
+                    }
+                    } // end !alreadyProvisioned
+                } else {
+                    // ---- STANDARD MODE (no pre-provisioning) ----
+                    // Copy raw ubuntu-base tarball to APK assets.
+                    // Provisioning (apt-get install) runs at first launch inside the device.
+                    if (!apkUbuntu.exists() || apkUbuntu.length() != ubuntuTar.length()) {
+                        java.nio.file.Files.copy(ubuntuTar.toPath(), apkUbuntu.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                    logger.quiet("  [ubuntu] READY (24.04 ARM64, ${ubuntuTar.length() / (1024*1024)} MB)")
+                    if (provisionRootfs && termboxOffline) {
+                        logger.quiet("  [ubuntu] NOTE: -PprovisionRootfs=true ignored (offline mode)")
+                    }
+                    assetsReady++
                 }
-                logger.quiet("  [ubuntu] READY (24.04 ARM64, ${ubuntuTar.length() / (1024*1024)} MB)")
-                assetsReady++
             }
         } catch (Exception e) {
             logger.warn("  [ubuntu] Warning: ${e.message}")
             warnings << "ubuntu: ${e.message}"
+        }
+
+        // ========================================
+        // 2.5 PROOT (Termux proot binary + runtime libraries)
+        // ========================================
+        logger.quiet("\n--- Preparing proot ---")
+        def proot = manifest.proot
+        def prootDestDir = new File(termboxApkAssetsDir, "proot")
+
+        try {
+            // Extract all three .debs into one staging tree, then copy the files proot
+            // needs into the APK assets under termbox-runtime/proot/{bin,libexec,lib}.
+            def prootStaging = new File(termboxExtractedDir, 'proot')
+            if (prootStaging.exists()) prootStaging.deleteDir()
+            prootStaging.mkdirs()
+
+            def allExtracted = true
+            proot.packages.each { pkg ->
+                def debFile = new File(termboxDownloadsDir, pkg.filename)
+                if (!downloadAsset("proot-" + pkg.name, pkg.url, pkg.sha256, debFile, termboxOffline)) {
+                    allExtracted = false
+                    return
+                }
+
+                def pkgDir = new File(termboxExtractedDir, 'proot-' + pkg.name)
+                if (pkgDir.exists()) pkgDir.deleteDir()
+                pkgDir.mkdirs()
+
+                if (!execCommand("Extract " + pkg.name + " .deb",
+                    "sh", "-c", "ar -x ${debFile.absolutePath} --output=${pkgDir.absolutePath}")) {
+                    throw new GradleException("Failed to extract " + pkg.name + " .deb")
+                }
+
+                def dataTar = new File(pkgDir, 'data.tar.xz')
+                if (!dataTar.exists()) dataTar = new File(pkgDir, 'data.tar.zst')
+                if (!dataTar.exists()) dataTar = new File(pkgDir, 'data.tar.gz')
+                if (!dataTar.exists()) {
+                    throw new GradleException("data.tar.* not found in " + pkg.name + " .deb. Contents: ${pkgDir.listFiles()?.collect { it.name }?.join(', ')}")
+                }
+
+                def dataDir = new File(pkgDir, 'data')
+                dataDir.mkdirs()
+                if (!execCommand("Extract " + pkg.name + " data archive",
+                    "sh", "-c", "tar -xaf ${dataTar.absolutePath} -C ${dataDir.absolutePath}")) {
+                    throw new GradleException("Failed to extract " + pkg.name + " data archive")
+                }
+
+                // Merge extracted tree into shared staging dir
+                if (!execCommand("Merge " + pkg.name + " files",
+                    "sh", "-c", "cp -r ${dataDir.absolutePath}/. ${prootStaging.absolutePath}/")) {
+                    throw new GradleException("Failed to merge " + pkg.name + " files")
+                }
+            }
+
+            if (allExtracted) {
+                // Files are unpacked under data/data/com.termux/files/usr/...
+                def usrDir = new File(prootStaging, 'data/data/com.termux/files/usr')
+                if (!usrDir.exists()) {
+                    throw new GradleException("Unexpected proot package layout: " + prootStaging.absolutePath)
+                }
+
+                def srcProot = new File(usrDir, 'bin/proot')
+                if (!srcProot.exists()) {
+                    throw new GradleException("proot binary not found in extracted .deb")
+                }
+
+                // Copy proot binary
+                def destProot = new File(prootDestDir, 'bin/proot')
+                destProot.parentFile.mkdirs()
+                java.nio.file.Files.copy(srcProot.toPath(), destProot.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+
+                // Copy loaders (statically linked, used by proot to run guest binaries)
+                ['loader', 'loader32'].each { loaderName ->
+                    def srcLoader = new File(usrDir, 'libexec/proot/' + loaderName)
+                    if (srcLoader.exists()) {
+                        def destLoader = new File(prootDestDir, 'libexec/' + loaderName)
+                        destLoader.parentFile.mkdirs()
+                        java.nio.file.Files.copy(srcLoader.toPath(), destLoader.toPath(),
+                            java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                    }
+                }
+
+                // Copy runtime libraries into proot/lib. libtalloc.so.2 is the SONAME that
+                // the proot binary links against, so the file must be stored under that name
+                // (assets cannot carry symlinks reliably).
+                def destLibDir = new File(prootDestDir, 'lib')
+                destLibDir.mkdirs()
+                def srcShmem = new File(usrDir, 'lib/libandroid-shmem.so')
+                if (srcShmem.exists()) {
+                    java.nio.file.Files.copy(srcShmem.toPath(), new File(destLibDir, 'libandroid-shmem.so').toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+                def srcTalloc = new File(usrDir, 'lib/libtalloc.so.2.4.3')
+                if (srcTalloc.exists()) {
+                    java.nio.file.Files.copy(srcTalloc.toPath(), new File(destLibDir, 'libtalloc.so.2').toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+
+                logger.quiet("  [proot] READY (v${proot.version}, ${destProot.length()} bytes)")
+                assetsReady++
+            }
+        } catch (Exception e) {
+            logger.warn("  [proot] Warning: ${e.message}")
+            warnings << "proot: ${e.message}"
         }
 
         // ========================================
@@ -294,7 +444,19 @@ task prepareTermBoxAssets {
         def box64Binary = new File(termboxApkAssetsDir, "box64/box64")
 
         try {
-            if (box64Binary.exists() && box64Binary.length() > 0) {
+            // Prefer the committed patched box64 (termbox-assets/prebuilt/box64/box64):
+            // built from ptitSeb/box64 with the MAP_FIXED fix (box64-mapfixed.patch) so
+            // fixed-address (ET_EXEC) binaries like Bun-compiled opencode load correctly.
+            // This is the source of truth for what ships in the APK. The download path
+            // below only kicks in when the prebuilt binary is absent.
+            def prebuiltBox64 = new File(termboxAssetsDir, 'prebuilt/box64/box64')
+            if (prebuiltBox64.exists() && prebuiltBox64.length() > 0) {
+                box64Binary.parentFile.mkdirs()
+                java.nio.file.Files.copy(prebuiltBox64.toPath(), box64Binary.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [box64] Using committed patched prebuilt binary (${box64Binary.length()} bytes)")
+                assetsReady++
+            } else if (box64Binary.exists() && box64Binary.length() > 0) {
                 logger.quiet("  [box64] Using existing binary: ${box64Binary.name} (${box64Binary.length()} bytes)")
                 assetsReady++
             } else if (termboxOffline) {
@@ -385,6 +547,130 @@ task prepareTermBoxAssets {
         }
 
         // ========================================
+        // 3.5 BOX64 TRANSPARENT LAYER (ARM64 launcher used by termbox-wrap64)
+        // ========================================
+        logger.quiet("\n--- Preparing Box64 transparent layer ---")
+        def box64Layer = manifest.'box64-layer'
+        try {
+            def srcLauncher = new File(termboxAssetsDir, 'prebuilt/box64/termbox-x86_64-launcher')
+            def destLauncher = new File(termboxApkAssetsDir, 'box64/termbox-x86_64-launcher')
+            if (srcLauncher.exists()) {
+                destLauncher.parentFile.mkdirs()
+                java.nio.file.Files.copy(srcLauncher.toPath(), destLauncher.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [box64-layer] READY (launcher ${destLauncher.length()} bytes)")
+                assetsReady++
+            } else {
+                throw new GradleException("termbox-x86_64-launcher not found at ${srcLauncher.absolutePath} " +
+                    "- build it from termbox-assets/prebuilt/box64/termbox-x86_64-launcher.c with the NDK")
+            }
+
+            def srcScanner = new File(termboxAssetsDir, 'prebuilt/box64/termbox-scan64')
+            def destScanner = new File(termboxApkAssetsDir, 'box64/termbox-scan64')
+            if (srcScanner.exists()) {
+                java.nio.file.Files.copy(srcScanner.toPath(), destScanner.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [box64-layer] READY (scanner ${destScanner.length()} bytes)")
+            } else {
+                throw new GradleException("termbox-scan64 not found at ${srcScanner.absolutePath} " +
+                    "- build it from termbox-assets/prebuilt/box64/termbox-scan64.c with the NDK")
+            }
+
+            def srcWrapd = new File(termboxAssetsDir, 'prebuilt/box64/termbox-wrapd')
+            def destWrapd = new File(termboxApkAssetsDir, 'box64/termbox-wrapd')
+            if (srcWrapd.exists()) {
+                java.nio.file.Files.copy(srcWrapd.toPath(), destWrapd.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [box64-layer] READY (watcher ${destWrapd.length()} bytes)")
+            } else {
+                throw new GradleException("termbox-wrapd not found at ${srcWrapd.absolutePath} " +
+                    "- build it from termbox-assets/prebuilt/box64/termbox-wrapd.c with the NDK")
+            }
+        } catch (Exception e) {
+            logger.warn("  [box64-layer] Warning: ${e.message}")
+            warnings << "box64-layer: ${e.message}"
+        }
+
+        // The legacy LD_PRELOAD execve interposer (libbox64auto.so) is no longer
+        // installed or injected: it only intercepted glibc execve/execv made through
+        // public symbols, so JDK 17's ProcessBuilder (jspawnhelper -> execvp)
+        // bypassed it and ARM64 processes were preloaded needlessly. The on-disk
+        // launcher above cannot be bypassed. The .so stays in prebuilt/ only as
+        // reference.
+
+        // ========================================
+        // 3.6 BOX64 X86_64 LIBS (glibc runtime for emulated binaries)
+        // ========================================
+        logger.quiet("\n--- Preparing Box64 x86_64 libraries ---")
+        def box64Libs = manifest.'box64-libs'
+        try {
+            def staging = new File(termboxExtractedDir, 'box64-libs')
+            if (staging.exists()) staging.deleteDir()
+            staging.mkdirs()
+
+            def allExtracted = true
+            box64Libs.packages.each { pkg ->
+                def debFile = new File(termboxDownloadsDir, pkg.filename)
+                if (!downloadAsset("box64libs-" + pkg.name, pkg.url, pkg.sha256, debFile, termboxOffline)) {
+                    allExtracted = false
+                    return
+                }
+                def pkgDir = new File(termboxExtractedDir, 'box64libs-' + pkg.name)
+                if (pkgDir.exists()) pkgDir.deleteDir()
+                pkgDir.mkdirs()
+                // dpkg-deb handles zstd/xz/gz data archives; available on Debian/Ubuntu builders
+                // (including CI's ubuntu-latest).
+                if (!execCommand("Extract " + pkg.name + " .deb",
+                    "sh", "-c", "dpkg-deb -x ${debFile.absolutePath} ${pkgDir.absolutePath}")) {
+                    throw new GradleException("Failed to extract " + pkg.name + " .deb with dpkg-deb")
+                }
+                if (!execCommand("Merge " + pkg.name + " files",
+                    "sh", "-c", "cp -r ${pkgDir.absolutePath}/. ${staging.absolutePath}/")) {
+                    throw new GradleException("Failed to merge " + pkg.name + " files")
+                }
+            }
+
+            if (allExtracted) {
+                def ldSrc = new File(staging, 'usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2')
+                if (ldSrc.exists()) {
+                    // Real file, not a symlink: assets cannot carry symlinks reliably.
+                    // Staged at lib64/ld-linux-x86-64.so.2 (top-level) so the archive
+                    // entry lands directly on the guest's /lib64/... path.
+                    def ldReal = new File(staging, 'lib64/ld-linux-x86-64.so.2')
+                    ldReal.parentFile.mkdirs()
+                    java.nio.file.Files.copy(ldSrc.toPath(), ldReal.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                }
+
+                def tarOut = new File(termboxApkAssetsDir, 'box64-libs/box64-libs.tar.gz')
+                tarOut.parentFile.mkdirs()
+                // Deterministic tar (fixed mtime/owner/sort order) so the archive
+                // checksum is stable across builds and machines.
+                // NOTE: entries live under usr/lib/x86_64-linux-gnu (NOT a top-level
+                // lib/ entry): extracting a top-level lib/ directory would clobber the
+                // guest's /lib -> usr/lib symlink and break every ARM64 binary in the
+                // rootfs. The guest's /lib symlink resolves usr/lib/x86_64-linux-gnu.
+                if (!execCommand("Pack box64-libs archive",
+                    "sh", "-c", "tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner -czf ${tarOut.absolutePath} -C ${staging.absolutePath} usr/lib/x86_64-linux-gnu lib64/ld-linux-x86-64.so.2")) {
+                    throw new GradleException("Failed to pack box64-libs archive")
+                }
+
+                def expected = box64Libs.archive.sha256
+                def actual = calculateSha256(tarOut)
+                if (expected && expected != actual) {
+                    logger.warn("  [box64-libs] SHA-256 mismatch (got ${actual}, expected ${expected})")
+                    warnings << "box64-libs sha256 mismatch"
+                } else {
+                    logger.quiet("  [box64-libs] READY (${tarOut.length() / (1024*1024)} MB, sha256 ${actual.take(12)}...)")
+                    assetsReady++
+                }
+            }
+        } catch (Exception e) {
+            logger.warn("  [box64-libs] Warning: ${e.message}")
+            warnings << "box64-libs: ${e.message}"
+        }
+
+        // ========================================
         // 4. TERMBOX CONFIGURATION FILES
         // ========================================
         logger.quiet("\n--- Copying TermBox Configuration ---")
@@ -450,8 +736,24 @@ task prepareTermBoxAssets {
 
 /**
  * Create the cleanTermBoxAssets task
- */
-task cleanTermBoxAssets {
+ */    task provisionUbuntuRootfs {
+    description = 'Pre-installs systemd, dbus, ca-certificates, locales into the ubuntu-base rootfs using Docker+QEMU (requires Docker with ARM64 QEMU support)'
+    group = 'TermBox'
+    dependsOn prepareTermBoxAssets
+
+    doLast {
+        logger.quiet("\n========================================")
+        logger.quiet("    Pre-provisioning Ubuntu Rootfs")
+        logger.quiet("========================================\n")
+        logger.quiet("This task has already run as part of prepareTermBoxAssets when")
+        logger.quiet("-PprovisionRootfs=true was passed. To re-run provisioning:")
+        logger.quiet("  ./gradlew prepareTermBoxAssets -PprovisionRootfs=true\n")
+        logger.quiet("To build WITHOUT pre-provisioning (default):")
+        logger.quiet("  ./gradlew prepareTermBoxAssets\n")
+    }
+}
+
+    task cleanTermBoxAssets {
     description = 'Removes all downloaded and prepared TermBox assets (next build will re-download)'
     group = 'TermBox'
 
@@ -483,9 +785,16 @@ task termboxBuildSummary {
 
     doLast {
         def bootstrapReady = new File(termboxApkAssetsDir, "bootstrap/aarch64.zip").exists()
-        def ubuntuReady = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.xz").exists()
+        def ubuntuReady = new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.gz").exists() ||
+                          new File(termboxApkAssetsDir, "ubuntu/ubuntu-24.04-arm64.tar.xz").exists()
         def box64Ready = new File(termboxApkAssetsDir, "box64/box64").exists()
         def prootDistroReady = new File(termboxApkAssetsDir, "proot-distro/").exists()
+        def provisionedUbuntu = false
+        if (ubuntuReady) {
+            // Check if the rootfs contains the provisioned marker
+            def provisionedMarker = new File(termboxApkAssetsDir, "ubuntu/.termbox-provisioned")
+            provisionedUbuntu = provisionedMarker.exists()
+        }
 
         logger.quiet("\n========================================")
         logger.quiet("        TermBox Build Summary")
@@ -498,7 +807,8 @@ task termboxBuildSummary {
         logger.quiet("Offline Runtime:")
         logger.quiet("  Bootstrap:      ${bootstrapReady ? 'READY' : 'MISSING'}")
         logger.quiet("  proot-distro:   ${prootDistroReady ? 'READY' : 'MISSING'}")
-        logger.quiet("  Ubuntu 24.04:   ${ubuntuReady ? 'READY' : 'MISSING'}")
+        logger.quiet("  Ubuntu 24.04:   ${ubuntuReady ? (provisionedUbuntu ? 'READY (PRE-PROVISIONED)' : 'READY') : 'MISSING'}")
+        logger.quiet("  Provisioned:   ${provisionedUbuntu ? 'YES (systemd/dbus/certs/locales bundled)' : 'NO (first-launch apt-get)'}")
         logger.quiet("  Box64:          ${box64Ready ? 'READY (glibc)' : 'MISSING'}")
         logger.quiet("  x86_64 fallback: ENABLED\n")
 

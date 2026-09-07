@@ -280,21 +280,17 @@ afterEvaluate {
     // The base APK builds successfully without it.
 }
 
-// Hook prepareTermBoxAssets to run before mergeAssets only if explicitly requested
-// via -PtermboxOffline=true or by running prepareTermBoxAssets directly.
-tasks.configureEach { task ->
-    if (task.name.startsWith('merge') && task.name.endsWith('Assets')) {
-        try {
-            def prepareTask = project(':termbox-assets').tasks.findByName('prepareTermBoxAssets')
-            if (prepareTask != null) {
-                // Only add dependency if assets already exist (won't fail the build)
-                def assetsDir = file('src/main/assets/termbox-runtime')
-                if (assetsDir.exists() && assetsDir.listFiles()?.length > 0) {
-                    task.dependsOn(prepareTask)
-                }
-            }
-        } catch (Exception ignored) {
-            // :termbox-assets module may not be available
+// TermBox offline runtime assets (proot-distro, Ubuntu rootfs, Box64) are prepared by
+// the :termbox-assets 'prepareTermBoxAssets' task. Release builds always run it before
+// merging assets so that a plain './gradlew assembleRelease' produces the full offline
+// APK. The task itself is component-wise non-fatal (only Box64 is required), so the
+// build will not fail if an optional asset cannot be produced.
+afterEvaluate {
+    // Wire 'prepareTermBoxAssets' (in :termbox-assets) as a dependency of the release
+    // asset merge task using its task path, so Gradle resolves and configures the
+    // :termbox-assets project lazily when the dependency graph is built.
+    tasks.matching { it.name.startsWith('merge') && it.name.endsWith('ReleaseAssets') }
+        .configureEach { task ->
+            task.dependsOn(':termbox-assets:prepareTermBoxAssets')
         }
-    }
 }

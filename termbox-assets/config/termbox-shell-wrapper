@@ -9,15 +9,21 @@
 #        ↓
 #   TerminalSession (this script as login shell)
 #        ↓
-#   proot-distro ubuntu (Ubuntu ARM64 environment)
+#   termbox-ubuntu (proot, Ubuntu ARM64 environment)
 #        ↓
 #   Ubuntu bash shell
 #        ↓
 #   ARM64 ELF → native execution
 #   x86_64 ELF → Box64 transparent execution
 #
-# To escape back to the native TermBox host shell:
-#   termbox-host
+# termbox-ubuntu is RUN (not exec'd) so that when the proot session ends the
+# wrapper can act on it:
+#   - 'termbox-host' from inside Ubuntu writes ~/.termbox-host → drop into the
+#     native TermBox host shell.
+#   - 'termbox-storage' from inside Ubuntu writes ~/.termbox-storage → run the
+#     host termbox-storage (shows the Android storage permission dialog) and
+#     drop into the native TermBox host shell.
+#   - a plain 'exit' from Ubuntu still closes the session.
 #
 # Copyright (c) TermBox Contributors
 # SPDX-License-Identifier: MIT
@@ -30,20 +36,59 @@ fi
 
 # Set the TERMBOX_DEFAULT_SESSION flag
 export TERMBOX_DEFAULT_SESSION="ubuntu"
-export TERMBOX_HOST_SHELL="${TERMBOX_PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/bash"
+export TERMBOX_HOST_SHELL="${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/bash"
+TERMBOX_PREFIX="${PREFIX:-/data/data/com.qali.termbox/files/usr}"
+TERMBOX_APP_DIR="${TERMBOX_PREFIX%/files/usr}"
+TERMBOX_HOME="${TERMBOX_APP_DIR}/files/home"
+
+# Shell startup: source the user's ~/.bashrc so aliases/functions/exports
+# are applied every session. A login shell alone reads ~/.profile, not
+# ~/.bashrc - so, mirroring Ubuntu's default, create a ~/.profile that
+# sources it (only if the user has no .profile/.bash_profile of their own).
+if [ -f "${TERMBOX_HOME}/.bashrc" ] && \
+   [ ! -f "${TERMBOX_HOME}/.profile" ] && \
+   [ ! -f "${TERMBOX_HOME}/.bash_profile" ]; then
+    cat > "${TERMBOX_HOME}/.profile" <<'TERMBOX_PROFILE_EOF'
+# ~/.profile: executed by login shells. Source ~/.bashrc (Debian/Ubuntu default).
+if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi
+TERMBOX_PROFILE_EOF
+fi
 
 # Check if the termbox-ubuntu entry point exists and is executable
-TERMBOX_UBUNTU="${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/termbox-ubuntu"
+TERMBOX_UBUNTU="${TERMBOX_PREFIX}/bin/termbox-ubuntu"
 if [ -x "${TERMBOX_UBUNTU}" ]; then
-    exec "${TERMBOX_UBUNTU}"
+    # Run it, not exec: act on how the Ubuntu session ended.
+    "${TERMBOX_UBUNTU}"
+    status="$?"
+
+    # termbox-storage was requested from inside Ubuntu: run it now (shows the
+    # storage permission dialog) and then drop into the native shell.
+    if [ -f "${TERMBOX_HOME}/.termbox-storage" ]; then
+        rm -f "${TERMBOX_HOME}/.termbox-storage"
+        if [ -x "${TERMBOX_PREFIX}/bin/termbox-storage" ]; then
+            "${TERMBOX_PREFIX}/bin/termbox-storage"
+        fi
+        exec "${TERMBOX_PREFIX}/bin/bash" --login
+    fi
+
+    # termbox-host was requested from inside Ubuntu: drop into native shell.
+    if [ -f "${TERMBOX_HOME}/.termbox-host" ]; then
+        rm -f "${TERMBOX_HOME}/.termbox-host"
+        exec "${TERMBOX_PREFIX}/bin/bash" --login
+    fi
+
+    # Plain 'exit' from Ubuntu: close the session like before.
+    exit "$status"
 fi
 
 # Fallback: try proot-distro directly
-PROOT_DISTRO="${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/proot-distro"
+PROOT_DISTRO="${TERMBOX_PREFIX}/bin/proot-distro"
 if [ -x "${PROOT_DISTRO}" ]; then
     exec "${PROOT_DISTRO}" login ubuntu
 fi
 
 # Last resort: drop to native shell
 echo "TermBox: Ubuntu entry point not found, starting native shell."
-exec "${PREFIX:-/data/data/com.qali.termbox/files/usr}/bin/bash" --login
+exec "${TERMBOX_PREFIX}/bin/bash" --login

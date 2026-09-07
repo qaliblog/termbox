@@ -1,85 +1,168 @@
 #!/bin/bash
-# termbox-ubuntu - Default TermBox shell that enters Ubuntu ARM64
+# termbox-ubuntu - Enter Ubuntu Linux (full userspace)
 #
-# This script is the default login shell for TermBox terminal sessions.
-# It launches Ubuntu via proot-distro, providing a complete offline
-# Ubuntu ARM64 environment with Box64 transparent x86_64 support.
+# Default login shell for TermBox terminal sessions. Launches a complete Ubuntu
+# ARM64 userspace with Box64 transparent x86_64 support. On first start it
+# provisions the guest (systemd, dbus, ca-certificates, locales) via apt. When
+# the device provides real root AND the kernel exposes the needed features it
+# runs Ubuntu as a native chroot with systemd as PID 1 (termbox-native);
+# otherwise it falls back to proot mode (no root required).
 #
-# To exit Ubuntu and return to the native TermBox shell:
-#   termbox-host
-#
-# To start a new session directly in the TermBox host shell:
-#   Use the TermBox settings to set default shell to host mode.
+# To exit Ubuntu and return to the native TermBox shell:  termbox-host
+# Diagnostics (systemd feasibility, kernel features):    termbox-syscheck
 #
 # Copyright (c) TermBox Contributors
 # SPDX-License-Identifier: MIT
 
-set -e
-
-# Paths
-TERMBOX_APP_DIR="${ANDROID_DATA:-/data/data/com.qali.termbox}"
-TERMBOX_PREFIX="${TERMBOX_APP_DIR}/files/usr"
+# NOTE: paths derive from $PREFIX instead of ${ANDROID_DATA:-...}: Android
+# always sets ANDROID_DATA=/data, so the fallback would never trigger and
+# paths would resolve under /data instead of the app's data directory.
+TERMBOX_PREFIX="${PREFIX:-/data/data/com.qali.termbox/files/usr}"
+TERMBOX_APP_DIR="${TERMBOX_PREFIX%/files/usr}"
 TERMBOX_HOME="${TERMBOX_APP_DIR}/files/home"
 TERMBOX_UROOT="${TERMBOX_APP_DIR}/files/ubuntu-root"
 PROOT="${TERMBOX_PREFIX}/bin/proot"
 BOX64="${TERMBOX_PREFIX}/bin/box64"
 
-# Detect if we are already inside proot (avoid nested sessions)
-if [ -f /.proot.* ] || [ "$(id -u 2>/dev/null)" = "0" ] && [ -f /etc/ubuntu-release ] 2>/dev/null; then
-    # We appear to be inside a proot environment already
-    # Just drop to a regular shell
-    exec /bin/bash --login
+# Already inside the Ubuntu guest (proot or native chroot)? Run a shell.
+if [ -f /etc/os-release ] && [ "$(id -u 2>/dev/null)" = "0" ]; then
+  exec /bin/bash --login
 fi
 
 # Check if Ubuntu rootfs exists
 if [ ! -d "${TERMBOX_UROOT}" ] || [ ! -f "${TERMBOX_UROOT}/etc/os-release" ]; then
-    echo "TermBox: Ubuntu rootfs not found at ${TERMBOX_UROOT}"
-    echo "TermBox: Falling back to native TermBox shell."
-    echo ""
-    exec "${TERMBOX_PREFIX}/bin/bash" --login
+  echo "TermBox: Ubuntu rootfs not found at ${TERMBOX_UROOT}"
+  echo "TermBox: Falling back to native TermBox shell."
+  exec "${TERMBOX_PREFIX}/bin/bash" --login
 fi
 
-# Check if proot exists
-if [ ! -x "${PROOT}" ]; then
-    echo "TermBox: proot not found at ${PROOT}"
-    echo "TermBox: Falling back to native TermBox shell."
-    echo ""
-    exec "${TERMBOX_PREFIX}/bin/bash" --login
+# First-start provisioning: install systemd, dbus, ca-certificates and locales
+# into the guest so the environment is a complete Ubuntu userspace. Idempotent
+# and resumable - termbox-provision writes /etc/termbox-provisioned in the guest
+# on success and is retried on the next session start until then. Skip with
+# TERMBOX_SKIP_PROVISION=1.
+if [ "${TERMBOX_SKIP_PROVISION:-0}" != "1" ] && [ ! -f "${TERMBOX_UROOT}/etc/termbox-provisioned" ]; then
+  echo "TermBox: Provisioning Ubuntu userspace (systemd, dbus, ca-certificates)..."
+  if [ -x "${TERMBOX_PREFIX}/bin/termbox-provision" ]; then
+    "${TERMBOX_PREFIX}/bin/termbox-provision"
+  fi
 fi
 
-# Export Box64 environment for x86_64 transparent execution inside Ubuntu
+# Export Box64 configuration
+# NOTE: STRONGMEM and BLEEDING_EDGE are deliberately NOT set: on-device
+# testing showed they hang some x86_64 binaries (e.g. Bun-compiled apps)
+# under the dynarec. The plain dynarec defaults run everything tested.
 export BOX64_DYNAREC=1
-export BOX64_DYNAREC_STRONGMEM=1
 export BOX64_DYNAREC_BIGBLOCK=1
 export BOX64_DYNAREC_SAFEFLAGS=1
-export BOX64_DYNAREC_BLEEDING_EDGE=1
 export BOX64_ENV=0
-export BOX64_LOG=0
 export BOX64_NOBANNER=0
 
-# Launch Ubuntu via proot
+# Native mode (systemd as PID 1) needs real root plus kernel features.
+# termbox-native performs the capability checks, mounts and chroot+systemd
+# launch; it exits non-zero with diagnostics when the Android kernel cannot
+# support it, and we fall back to proot mode.
+# NOTE: real-root detection must NOT use `command -v su` - the Termux bootstrap
+# ships its own su script in $PREFIX/bin that grants no Android root.
+termbox_has_root() {
+  [ "$(id -u)" = "0" ] && return 0
+  for p in /system/bin/su /system/xbin/su /sbin/su /vendor/bin/su /system/bin/magisk /data/adb/magisk/magisk /data/adb/ksu/bin/ksud; do
+    [ -x "$p" ] && return 0
+  done
+  return 1
+}
+if termbox_has_root; then
+  if [ -x "${TERMBOX_PREFIX}/bin/termbox-native" ]; then
+    "${TERMBOX_PREFIX}/bin/termbox-native"
+    native_status=$?
+    if [ "${TERMBOX_FORCE_NATIVE:-0}" = "1" ]; then
+      exit "$native_status"
+    fi
+    if [ "$native_status" -ne 0 ]; then
+      echo "TermBox: native (systemd) launch unavailable, falling back to proot mode."
+      echo "TermBox: run 'termbox-syscheck' for systemd/kernel diagnostics."
+    fi
+  fi
+fi
+
+# Discover the Android SDK wherever it lives: termbox-wrap64 locates it
+# regardless of the folder's name or location (env vars, any directory
+# containing build-tools, local.properties sdk.dir, /sdcard) - see
+# termbox-wrap64 --print-sdk-roots. The roots are handed to the watcher below
+# so a freshly placed SDK gets real-time inotify coverage, not just the
+# periodic sweep.
+TERMBOX_SDK_ROOTS=""
+if [ -x "${TERMBOX_PREFIX}/bin/termbox-wrap64" ]; then
+  TERMBOX_SDK_ROOTS=$("${TERMBOX_PREFIX}/bin/termbox-wrap64" --print-sdk-roots 2>/dev/null | tr '\n' ' ')
+fi
+
+# Refresh the transparent Box64 layer (on the HOST, no proot/ptrace overhead):
+# wrap any x86_64 ELF executables under the home tree, /usr/local, /usr/bin,
+# the Gradle cache and the discovered SDK roots with ARM64 launchers so they
+# run through box64 - including as subprocesses of native ARM64 parents
+# (Gradle/JDK aapt2). Runs before the guest starts, so the environment is
+# always up to date on entry. (termbox-wrap64 rediscovers the SDK itself.)
+if [ -x "${TERMBOX_PREFIX}/bin/termbox-wrap64" ] && [ -f "${TERMBOX_UROOT}/etc/os-release" ]; then
+  "${TERMBOX_PREFIX}/bin/termbox-wrap64" >/dev/null 2>&1 || true
+fi
+
+# Continuous Box64 wrap watcher (termbox-wrapd): keeps the transparent layer
+# up to date while the session runs. Gradle/AGP re-extracts x86_64 tools
+# (aapt2, zipalign) into fresh ~/.gradle/caches/<ver>/transforms directories
+# during a build - the one-shot wrap above cannot see those. The watcher uses
+# inotify to wrap any new x86_64 ELF executable the instant it is written or
+# moved in, BEFORE the ARM64 JVM can spawn it, plus a periodic full sweep.
+# Discovered SDK roots are passed as CLI args so they are watched in real
+# time too (any name, any location). Single-instance (flock), backgrounded,
+# logs to the TermBox tmp dir.
+if [ -x "${TERMBOX_PREFIX}/bin/termbox-wrapd" ] && [ -f "${TERMBOX_UROOT}/etc/os-release" ]; then
+  # shellcheck disable=SC2086  # intentional word-splitting of SDK root list
+  nohup "${TERMBOX_PREFIX}/bin/termbox-wrapd" ${TERMBOX_SDK_ROOTS} \
+    >"${TERMBOX_PREFIX}/tmp/termbox-wrapd.log" 2>&1 &
+fi
+
+# Create bind sources
+mkdir -p "${TERMBOX_HOME}/storage" "${TERMBOX_PREFIX}/tmp" "${TERMBOX_PREFIX}/tmp/shm"
+
+# Source user ~/.bashrc at shell startup. The guest runs bash as a login
+# shell, which reads ~/.profile (not ~/.bashrc) - and /root inside the guest
+# is bind-mounted from ${TERMBOX_HOME}, which has no .profile. If the user
+# placed config in .bashrc (the conventional Debian/Ubuntu location) it
+# silently never ran. Create a .profile that sources .bashrc, matching
+# Ubuntu's default, but only if the user has not already provided their own
+# .profile or .bash_profile.
+if [ -f "${TERMBOX_HOME}/.bashrc" ] && \
+   [ ! -f "${TERMBOX_HOME}/.profile" ] && \
+   [ ! -f "${TERMBOX_HOME}/.bash_profile" ]; then
+    cat > "${TERMBOX_HOME}/.profile" <<'TERMBOX_PROFILE_EOF'
+# ~/.profile: executed by login shells. Source ~/.bashrc so the user's
+# interactive shell config (aliases, functions, exports) is applied at shell
+# startup, matching Debian/Ubuntu's default ~/.profile behavior.
+if [ -n "$BASH_VERSION" ] && [ -f "$HOME/.bashrc" ]; then
+    . "$HOME/.bashrc"
+fi
+TERMBOX_PROFILE_EOF
+fi
+
+# Launch Ubuntu via proot (no root required): complete Linux userspace with
+# /proc, /sys, /dev, /dev/pts, tmpfs-style /dev/shm, /run, /sdcard, storage,
+# DNS and Box64 all bound in. x86_64 binaries are routed through box64 by
+# termbox-wrap64 (on-disk ARM64 launchers - see termbox-wrap64), so no
+# LD_PRELOAD is needed and ARM64 processes are never touched.
 exec "${PROOT}" \
-    --link2symlink \
-    --kill-on-exit \
-    --root-id \
-    --cwd /root \
-    -b /dev \
-    -b /proc \
-    -b /sys \
-    -b "${TERMBOX_HOME}:/root" \
-    -b "${TERMBOX_HOME}/storage:/mnt/storage" \
-    -b "${TERMBOX_PREFIX}/tmp:/tmp" \
-    -b "${BOX64}:/usr/local/bin/box64" \
-    -r "${TERMBOX_UROOT}" \
-    /usr/bin/env -i \
-    HOME=/root \
-    USER=root \
-    TERM="${TERM:-xterm-256color}" \
-    LANG=en_US.UTF-8 \
-    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
-    BOX64_DYNAREC=1 \
-    BOX64_DYNAREC_STRONGMEM=1 \
-    BOX64_DYNAREC_BIGBLOCK=1 \
-    BOX64_DYNAREC_SAFEFLAGS=1 \
-    BOX64_DYNAREC_BLEEDING_EDGE=1 \
-    /bin/bash --login
+  --link2symlink --kill-on-exit --root-id --cwd=/root \
+  -b /dev -b /proc -b /sys \
+  -b "${TERMBOX_HOME}:/root" \
+  -b "${TERMBOX_HOME}/storage:/mnt/storage" \
+  -b "/storage/emulated/0:/sdcard" \
+  -b "${TERMBOX_PREFIX}/tmp:/tmp" \
+  -b "${TERMBOX_PREFIX}/tmp/shm:/dev/shm" \
+  -b "${BOX64}:/usr/local/bin/box64" \
+  -b "${TERMBOX_PREFIX}/etc/resolv.conf:/etc/resolv.conf" \
+  -r "${TERMBOX_UROOT}" \
+  /usr/bin/env -i \
+  HOME=/root USER=root TERM="${TERM:-xterm-256color}" \
+  LANG=en_US.UTF-8 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+  BOX64_LD_LIBRARY_PATH=/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:/lib64:/usr/lib64 \
+  BOX64_DYNAREC=1 BOX64_DYNAREC_BIGBLOCK=1 BOX64_DYNAREC_SAFEFLAGS=1 \
+  /bin/bash --login

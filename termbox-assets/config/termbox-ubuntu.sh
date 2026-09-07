@@ -275,7 +275,10 @@ main() {
     # Setup offline apt configuration
     setup_offline_apt
 
-    # Run proot with the Ubuntu rootfs
+    # Run proot with the Ubuntu rootfs. PROOT_TMP_DIR must point into this
+    # app's writable sandbox; the bundled proot default points at the upstream
+    # Termux package path (/data/data/com.termux), which is not accessible here.
+    export PROOT_TMP_DIR="${TERMBOX_PREFIX}/tmp"
     exec "${PROOT}" \
         "${PROOT_EXTRA_ARGS[@]}" \
         -r "${UBUNTU_ROOT}" \

@@ -41,3 +41,6 @@ local.properties
 .swp
 ehthumbs.db
 Thumbs.db
+
+# Freebuff agent state
+.freebuff/

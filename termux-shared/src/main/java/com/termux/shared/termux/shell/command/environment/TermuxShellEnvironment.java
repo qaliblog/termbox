@@ -84,6 +84,22 @@ public class TermuxShellEnvironment extends AndroidShellEnvironment {
         environment.put("TERMBOX_DEFAULT_SESSION", "ubuntu");
         environment.put("TERMBOX_HOST_SHELL", TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/bash");
 
+        // proot (bundled with the TermBox offline runtime) was compiled with the default
+        // "com.termux" prefix hardcoded, so its loader path and tmp dir must be overridden
+        // to point at this fork's own prefix, otherwise execve() of guest binaries fails.
+        environment.put("PROOT_LOADER", TermuxConstants.TERMUX_LIBEXEC_PREFIX_DIR_PATH + "/proot/loader");
+        environment.put("PROOT_LOADER_32", TermuxConstants.TERMUX_LIBEXEC_PREFIX_DIR_PATH + "/proot/loader32");
+        environment.put("PROOT_TMP_DIR", TermuxConstants.TERMUX_TMP_PREFIX_DIR_PATH);
+
+        // The bootstrap binaries were compiled with the official "com.termux" prefix
+        // hardcoded, so their compiled-in CA bundle path
+        // (/data/data/com.termux/files/usr/etc/tls/cert.pem) is not readable by forks.
+        // Point curl/openssl at this fork's own CA bundle, otherwise HTTPS fails with
+        // "error adding trust anchors" (curl exit 77) and the terminal looks offline.
+        // For the official package this is a no-op (same path), so it is safe to always set.
+        environment.put("CURL_CA_BUNDLE", TermuxConstants.TERMUX_ETC_PREFIX_DIR_PATH + "/tls/cert.pem");
+        environment.put("SSL_CERT_FILE", TermuxConstants.TERMUX_ETC_PREFIX_DIR_PATH + "/tls/cert.pem");
+
         // If failsafe is not enabled, then we keep default PATH and TMPDIR so that system binaries can be used
         if (!isFailSafe) {
             environment.put(ENV_TMPDIR, TermuxConstants.TERMUX_TMP_PREFIX_DIR_PATH);
@@ -92,9 +108,18 @@ public class TermuxShellEnvironment extends AndroidShellEnvironment {
                 environment.put(ENV_PATH, TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + ":" + TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH + "/applets");
                 environment.put(ENV_LD_LIBRARY_PATH, TermuxConstants.TERMUX_LIB_PREFIX_DIR_PATH);
             } else {
-                // Termux binaries on Android 7+ rely on DT_RUNPATH, so LD_LIBRARY_PATH should be unset by default
+                // Termux binaries on Android 7+ rely on DT_RUNPATH, so LD_LIBRARY_PATH should be unset
+                // by default when running as the official "com.termux" package.
                 environment.put(ENV_PATH, TermuxConstants.TERMUX_BIN_PREFIX_DIR_PATH);
-                environment.remove(ENV_LD_LIBRARY_PATH);
+                if (TermuxConstants.TERMUX_PACKAGE_NAME.equals("com.termux")) {
+                    environment.remove(ENV_LD_LIBRARY_PATH);
+                } else {
+                    // Forks using a different package name cannot access the prefix that the bootstrap
+                    // binaries were compiled with (DT_RUNPATH points to /data/data/com.termux/files/usr/lib),
+                    // so LD_LIBRARY_PATH must point to the fork's own $PREFIX/lib for the dynamic linker
+                    // to find libraries like libandroid-support.so.
+                    environment.put(ENV_LD_LIBRARY_PATH, TermuxConstants.TERMUX_LIB_PREFIX_DIR_PATH);
+                }
             }
         }
 

@@ -1,0 +1,75 @@
+#!/bin/bash
+# termbox-storage - Grant Android storage access to TermBox
+#
+# Asks the TermBox app to show the Android storage permission dialog
+# (WRITE_EXTERNAL_STORAGE / MANAGE_EXTERNAL_STORAGE). When granted, the app
+# creates symlinks to Android shared storage at ~/storage
+# (shared, downloads, dcim, pictures, music, movies, ...) automatically.
+#
+# Inside Ubuntu, shared storage is mounted at /sdcard. Run this from the
+# native TermBox host shell; when run from inside Ubuntu it exits the proot
+# session, requests the permission, and returns you to the host shell
+# (re-enter Ubuntu with 'termbox-ubuntu').
+#
+# Usage:
+#   termbox-storage         - Ask TermBox for the storage permission
+#   termbox-storage help    - Show help information
+#
+# Copyright (c) TermBox Contributors
+# SPDX-License-Identifier: MIT
+
+if [ "${1:-}" = "help" ] || [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
+    echo "termbox-storage - Grant Android storage access to TermBox"
+    echo ""
+    echo "Usage:"
+    echo "  termbox-storage    Ask TermBox for the storage permission"
+    echo ""
+    echo "Grant the permission dialog to access Android shared storage."
+    echo "Symlinks are then created at ~/storage (shared, downloads, dcim, ...)."
+    echo "Inside Ubuntu, shared storage is mounted at /sdcard."
+    exit 0
+fi
+
+# Paths
+TERMBOX_PREFIX="${PREFIX:-/data/data/com.qali.termbox/files/usr}"
+TERMBOX_APP_DIR="${TERMBOX_PREFIX%/files/usr}"
+TERMBOX_HOME="${TERMBOX_APP_DIR}/files/home"
+
+# When run from inside Ubuntu, delegate to the host shell: write the marker
+# that termbox-shell-wrapper picks up when the proot session exits, then leave.
+if [ -f /etc/os-release ] && [ "$(id -u 2>/dev/null)" = "0" ]; then
+    if touch /root/.termbox-storage 2>/dev/null; then
+        echo "Requesting the storage permission from the TermBox host shell..."
+        echo "Leaving Ubuntu to show the permission dialog; return with 'termbox-ubuntu'."
+        exit 0
+    fi
+fi
+
+echo "Requesting Android storage permission..."
+ACTION="com.qali.termbox.app.request_storage_permissions"
+
+status=1
+# Preferred: go through the app's own am socket server (termux-am).
+if [ -x "${TERMBOX_PREFIX}/bin/termux-am" ] && [ "${TERMUX_APP__AM_SOCKET_SERVER_ENABLED:-false}" = "true" ]; then
+    if "${TERMBOX_PREFIX}/bin/termux-am" broadcast --action "$ACTION" >/dev/null 2>&1; then
+        status=0
+    fi
+fi
+
+# Fallback: system am binary. --user 0 is required when called from an app uid.
+if [ "$status" != 0 ] && [ -x /system/bin/am ]; then
+    if /system/bin/am broadcast --user 0 -a "$ACTION" >/dev/null 2>&1; then
+        status=0
+    fi
+fi
+
+if [ "$status" != 0 ]; then
+    echo "Failed to ask the TermBox app for the storage permission."
+    echo "Make sure the TermBox terminal is open and visible, then try again."
+    exit 1
+fi
+
+echo "A permission dialog should appear in the TermBox app. Grant it to"
+echo "access Android shared storage. Symlinks are created automatically"
+echo "at: ${TERMBOX_HOME}/storage (shared, downloads, dcim, pictures, ...)."
+echo "Inside Ubuntu, shared storage is mounted at /sdcard."

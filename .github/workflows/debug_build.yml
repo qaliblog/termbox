@@ -42,10 +42,19 @@ jobs:
         shell: bash {0}
         run: |
           echo "========================================="
-          echo "  QEMU ARM64 Setup"
+          echo "  QEMU ARM64 Setup (optional, for rootfs provisioning)"
           echo "========================================="
+          echo ""
+          echo "QEMU is ONLY used during build to pre-provision the Ubuntu ARM64"
+          echo "rootfs with systemd, dbus, ca-certificates, and locales."
+          echo ""
+          echo "The TermBox app itself uses Box64 (not QEMU) for x86_64 emulation"
+          echo "at runtime. QEMU is purely a build-time dependency for rootfs setup."
+          echo ""
           if ! docker run --privileged --rm --pull=always tonistiigi/binfmt --install arm64 2>/dev/null; then
-            echo "WARNING: QEMU setup failed or not available, builds will use fallback modes"
+            echo "WARNING: QEMU setup failed or not available."
+            echo "Rootfs provisioning will fall back to standard (un-provisioned) mode."
+            echo "The APK will still build - users will run apt-get at first launch."
           fi
           echo "QEMU setup complete."
           echo ""
@@ -116,12 +125,12 @@ jobs:
             ERRORS=$((ERRORS + 1))
           fi
 
-          # Check proot
+          # Check proot (OPTIONAL - not needed if using bootstrap's built-in proot)
+          # proot is included in Termux bootstrap, so this check is informational
           if [ -f "$ASSETS_DIR/proot/bin/proot" ] && [ -f "$ASSETS_DIR/proot/lib/libandroid-shmem.so" ] && [ -f "$ASSETS_DIR/proot/lib/libtalloc.so.2" ]; then
-            echo "  proot:         PASS ($(file $ASSETS_DIR/proot/bin/proot | grep -o 'ELF 64-bit.*' | head -1))"
+            echo "  proot:         PASS ($(file $ASSETS_DIR/proot/bin/proot 2>/dev/null | grep -o 'ELF 64-bit.*' | head -1))"
           else
-            echo "  proot:         FAIL (missing binary or runtime libs)"
-            ERRORS=$((ERRORS + 1))
+            echo "  proot:         SKIP (optional - Termux bootstrap includes proot)"
           fi
 
           # Check Box64

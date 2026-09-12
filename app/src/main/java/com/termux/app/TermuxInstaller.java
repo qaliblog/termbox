@@ -401,6 +401,7 @@ final class TermuxInstaller {
     private static final String TERMBOX_PROOT_DIR = TERMBOX_ASSETS_DIR + "/proot";
     private static final String TERMBOX_UBUNTU_DIR = TERMBOX_ASSETS_DIR + "/ubuntu";
     private static final String TERMBOX_BOX64_DIR = TERMBOX_ASSETS_DIR + "/box64";
+    private static final String TERMBOX_ADB_DIR = TERMBOX_ASSETS_DIR + "/adb";
     private static final String TERMBOX_BOX64_LIBS_DIR = TERMBOX_ASSETS_DIR + "/box64-libs";
     private static final String TERMBOX_PROOT_DISTRO_DIR = TERMBOX_ASSETS_DIR + "/proot-distro";
     private static final String TERMBOX_CONFIG_DIR = TERMBOX_ASSETS_DIR + "/config";
@@ -865,6 +866,7 @@ final class TermuxInstaller {
                         try {
                             installTermBoxShellScripts(context, filesDir);
                             installTermBoxGuestScripts(context, filesDir);
+                            installTermBoxAdbClient(context, filesDir);
                         } catch (Exception e) {
                             Logger.logError(LOG_TAG, "Shell script refresh failed (non-fatal): " + e.getMessage());
                         }
@@ -1010,6 +1012,14 @@ final class TermuxInstaller {
                             installTermBoxGuestScripts(context, filesDir);
                         } catch (Exception e) {
                             Logger.logError(LOG_TAG, "Guest shell script installation failed (non-fatal): " + e.getMessage());
+                        }
+
+                        // Install the ADB bridge guest client as /usr/bin/adb so
+                        // programs inside Ubuntu use the normal adb interface.
+                        try {
+                            installTermBoxAdbClient(context, filesDir);
+                        } catch (Exception e) {
+                            Logger.logError(LOG_TAG, "ADB client installation failed (non-fatal): " + e.getMessage());
                         }
 
                         // Set executable permissions on binaries
@@ -2352,6 +2362,33 @@ final class TermuxInstaller {
         }
 
         Logger.logInfo(LOG_TAG, "TermBox guest scripts installed to " + guestBinDir.getAbsolutePath());
+    }
+
+    /**
+     * Install the ADB bridge guest client as ${TERMBOX_UROOT}/usr/bin/adb so
+     * programs inside the Ubuntu/PRoot guest use the normal adb interface
+     * (adb devices/shell/push/install/...). The server side runs in the app
+     * process (TermboxAdbBridge) and is reached over the shared loopback, so
+     * the guest only needs the binary. Idempotent: re-extracted on every app
+     * start like the other TermBox runtime files. Non-fatal on failure: the
+     * guest then simply has no adb command, like a device without
+     * platform-tools.
+     */
+    private static void installTermBoxAdbClient(Context context, File filesDir) {
+        File ubuntuRoot = new File(filesDir, "ubuntu-root");
+        if (!ubuntuRoot.isDirectory()) {
+            Logger.logDebug(LOG_TAG, "ADB client install skipped: no Ubuntu rootfs yet");
+            return;
+        }
+        try {
+            File adbBin = new File(ubuntuRoot, "usr/bin/adb");
+            adbBin.getParentFile().mkdirs();
+            extractAsset(context, TERMBOX_ADB_DIR + "/adb", adbBin);
+            setExecutable(adbBin);
+            Logger.logInfo(LOG_TAG, "ADB guest client installed to " + adbBin.getAbsolutePath());
+        } catch (Exception e) {
+            Logger.logWarn(LOG_TAG, "ADB guest client not installed: " + e.getMessage());
+        }
     }
 
     /**

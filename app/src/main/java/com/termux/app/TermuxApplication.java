@@ -4,6 +4,7 @@ import android.app.Application;
 import android.content.Context;
 
 import com.termux.BuildConfig;
+import com.termux.app.adb.TermboxAdbBridge;
 import com.termux.shared.errors.Error;
 import com.termux.shared.logger.Logger;
 import com.termux.shared.termux.TermuxBootstrap;
@@ -63,6 +64,16 @@ public class TermuxApplication extends Application {
             TermuxAmSocketServer.setupTermuxAmSocketServer(context);
         } else {
             Logger.logErrorExtended(LOG_TAG, "Termux files directory is not accessible\n" + error);
+        }
+
+        // Start the transparent ADB bridge server (127.0.0.1:5037) so adb
+        // clients inside the Ubuntu/PRoot guest can reach the host immediately.
+        try {
+            TermboxAdbBridge.start(context);
+        } catch (Throwable t) {
+            // The bridge must never take the app down; guest adb clients then
+            // see standard connection-refused behavior.
+            Logger.logError(LOG_TAG, "ADB bridge start failed: " + t);
         }
 
         // Init TermuxShellEnvironment constants and caches after everything has been setup including termux-am-socket server

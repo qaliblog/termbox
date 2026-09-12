@@ -671,6 +671,36 @@ task prepareTermBoxAssets {
         }
 
         // ========================================
+        // 3.7 ADB BRIDGE GUEST CLIENT (/usr/bin/adb)
+        // ========================================
+        logger.quiet("\n--- Preparing ADB bridge guest client ---")
+        try {
+            def adbBuildScript = new File(termboxAssetsDir, 'prebuilt/adb/build-adb-client.sh')
+            def adbPrebuilt = new File(termboxAssetsDir, 'prebuilt/adb/adb')
+            def adbDest = new File(termboxApkAssetsDir, 'adb/adb')
+            adbDest.parentFile.mkdirs()
+            if (adbPrebuilt.exists() && adbPrebuilt.length() > 0) {
+                // Committed binary is the source of truth for reproducible builds.
+                java.nio.file.Files.copy(adbPrebuilt.toPath(), adbDest.toPath(),
+                    java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                logger.quiet("  [adb] Using committed prebuilt client (${adbPrebuilt.length()} bytes)")
+            } else if (adbBuildScript.exists()) {
+                // Build from source (NDK when available, host gcc otherwise).
+                def buildCmd = "sh ${adbBuildScript.absolutePath} ${adbDest.absolutePath}"
+                if (!execCommand("Build adb guest client", "sh", "-c", buildCmd)) {
+                    throw new GradleException("adb client build failed")
+                }
+                logger.quiet("  [adb] Built guest client (${adbDest.length()} bytes)")
+            } else {
+                throw new GradleException("adb client source and prebuilt binary both missing")
+            }
+            assetsReady++
+        } catch (Exception e) {
+            logger.warn("  [adb] Warning: ${e.message}")
+            warnings << "adb client: ${e.message}"
+        }
+
+        // ========================================
         // 4. TERMBOX CONFIGURATION FILES
         // ========================================
         logger.quiet("\n--- Copying TermBox Configuration ---")

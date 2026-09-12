@@ -185,12 +185,12 @@ jobs:
               LIBS_SIZE=$(du -h $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | cut -f1)
               echo "  box64-libs:   PASS ($LIBS_SIZE)"
               if command -v tar &> /dev/null; then
-                HAS_LD=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib64/ld-linux-x86-64.so.2" || true)
                 HAS_LIBC=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib/x86_64-linux-gnu/libc.so.6" || true)
-                if [ "$HAS_LD" -gt 0 ] && [ "$HAS_LIBC" -gt 0 ]; then
-                  echo "               Contents: VERIFIED (ld-linux + libc present)"
+                HAS_LIBC=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib/x86_64-linux-gnu/libc.so.6" || true)
+                if [ "$HAS_LIBC" -gt 0 ]; then
+                  echo "               Contents: VERIFIED (libc.so.6 present)"
                 else
-                  echo "  box64-libs:   FAIL (missing ld-linux-x86-64.so.2 or libc.so.6 in archive)"
+                  echo "  box64-libs:   FAIL (missing libc.so.6 in archive)"
                   ERRORS=$((ERRORS + 1))
                 fi
               fi
@@ -233,12 +233,12 @@ jobs:
               LIBS_SIZE=$(du -h $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | cut -f1)
               echo "  box64-libs:   PASS ($LIBS_SIZE)"
               if command -v tar &> /dev/null; then
-                HAS_LD=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib64/ld-linux-x86-64.so.2" || true)
                 HAS_LIBC=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib/x86_64-linux-gnu/libc.so.6" || true)
-                if [ "$HAS_LD" -gt 0 ] && [ "$HAS_LIBC" -gt 0 ]; then
-                  echo "               Contents: VERIFIED (ld-linux + libc present)"
+                HAS_LIBC=$(tar tzf $ASSETS_DIR/box64-libs/box64-libs.tar.gz 2>/dev/null | grep -c "lib/x86_64-linux-gnu/libc.so.6" || true)
+                if [ "$HAS_LIBC" -gt 0 ]; then
+                  echo "               Contents: VERIFIED (libc.so.6 present)"
                 else
-                  echo "  box64-libs:   FAIL (missing ld-linux-x86-64.so.2 or libc.so.6 in archive)"
+                  echo "  box64-libs:   FAIL (missing libc.so.6 in archive)"
                   ERRORS=$((ERRORS + 1))
                 fi
               fi

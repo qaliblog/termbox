@@ -35,12 +35,12 @@ if [ -n "$NDK_BUILD" ]; then
     if [ -n "$TOOLCHAIN" ] && [ -x "$TOOLCHAIN/aarch64-linux-android21-clang" ]; then
         echo "[adb] Cross-building with NDK: $TOOLCHAIN/aarch64-linux-android21-clang"
         "$TOOLCHAIN/aarch64-linux-android21-clang" -std=c11 -O2 -Wall -Wextra \
-            -static -o "$OUT" "$SRC" -lpthread
+            -static -o "$OUT" "$SRC"
         exit 0
     fi
     echo "[adb] NDK found at $NDK_BUILD but no aarch64 clang wrapper; falling back to host gcc."
 fi
 
 echo "[adb] Building with host gcc (testing build, not device-ready):"
-gcc -std=c11 -O2 -Wall -Wextra -static -o "$OUT" "$SRC" -lpthread
+gcc -std=c11 -O2 -Wall -Wextra -static -o "$OUT" "$SRC"
 echo "[adb] Built $OUT"

@@ -55,7 +55,7 @@
   },
   "proot": {
     "description": "Termux proot binary and its runtime libraries (libandroid-shmem, libtalloc). proot is NOT part of the core Termux bootstrap, so it must be bundled separately for the offline runtime.",
-    "version": "5.1.107.91",
+    "version": "5.1.107.92",
     "architecture": "arm64",
     "install_method": "prebuilt_deb",
     "required_for_offline": true,
@@ -66,9 +66,9 @@
     "packages": [
       {
         "name": "proot",
-        "url": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.91_aarch64.deb",
-        "sha256": "1ad09f7ddf65f297a7b59a398cd1f23a48748b1144b225f0c1e2d9f447ef3efc",
-        "filename": "proot_5.1.107.91_aarch64.deb"
+        "url": "https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107.92_aarch64.deb",
+        "sha256": "1f1c983509701f6826f568482c70673ee453a9ba38c9f5fa445a472d6b7524e9",
+        "filename": "pool/main/p/proot/proot_5.1.107.92_aarch64.deb"
       },
       {
         "name": "libandroid-shmem",
@@ -213,9 +213,9 @@
       {
         "name": "libxml2",
         "version": "2.9.14+dfsg-1.3ubuntu3.8",
-        "url": "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2/libxml2_2.9.14+dfsg-1.3ubuntu3.8_amd64.deb",
-        "sha256": "bfd07c01d6e5ab3e327f3ca5819409b1914bbfb3f1a016d53e4dabd5f96143bb",
-        "filename": "libxml2_2.9.14+dfsg-1.3ubuntu3.8_amd64.deb"
+        "url": "https://packages.termux.dev/apt/termux-main/pool/main/libx/libxml2/libxml2_2.15.4_x86_64.deb",
+        "sha256": "694be31ee936772409b16b3bbcf5b27afb0623975eadd025b3f1ec2053d9fa95",
+        "filename": "pool/main/libx/libxml2/libxml2_2.15.4_x86_64.deb"
       },
       {
         "name": "libtinfo6",

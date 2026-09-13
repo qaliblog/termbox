@@ -113,7 +113,7 @@ class DeviceCommandHandlers {
         List<String[]> props = new ArrayList<>();
         put(props, "ro.build.version.release", android.os.Build.VERSION.RELEASE);
         put(props, "ro.build.version.sdk", String.valueOf(android.os.Build.VERSION.SDK_INT)); // sic: Build.VERSION is an alias to Build_VERSION in stubs
-        put(props, "ro.build.version.security_patch", Build.SECURITY_PATCH);
+        put(props, "ro.build.version.security_patch", android.os.Build.VERSION.SECURITY_PATCH);
         put(props, "ro.product.model", Build.MODEL);
         put(props, "ro.product.brand", Build.BRAND);
         put(props, "ro.product.manufacturer", Build.MANUFACTURER);

@@ -87,6 +87,18 @@ final class HostServices {
         return new String(buf, StandardCharsets.UTF_8);
     }
 
+    /**
+     * Read a device service string sent RAW (no 4-byte hex length prefix)
+     * after transport selection. The client writes the service string in one
+     * packet; we read up to a reasonable max length.
+     */
+    static String readDeviceServiceString(InputStream in) throws IOException {
+        byte[] buf = new byte[4096];
+        int n = in.read(buf);
+        if (n <= 0) throw new EOFException("EOF reading device service string");
+        return new String(buf, 0, n, StandardCharsets.UTF_8);
+    }
+
     /** Write a 4-hex-digit length + payload smart-protocol message. */
     static void writeMessage(OutputStream out, String payload) throws IOException {
         byte[] data = payload.getBytes(StandardCharsets.UTF_8);
@@ -210,11 +222,13 @@ final class HostServices {
 
         // Transport selection: OKAY, then the client sends the device service
         // string on the same socket (AOSP handle_transport_request).
+        // The device service string is sent RAW (no 4-byte hex length prefix),
+        // unlike host services. Read a reasonable buffer directly.
         if (rest.equals("transport-any")) {
             d(service, "transport-any serial=" + serial);
             if (DeviceServices.knownSerial(serial)) {
                 writeOkay(out);
-                String next = readMessage(in);
+                String next = readDeviceServiceString(in);
                 d("host service", "transport-any next: " + next);
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();
@@ -227,7 +241,7 @@ final class HostServices {
             d(service, "transport serial=" + serial + " wanted=" + wanted);
             if (SERIAL.equals(wanted) || DeviceServices.knownSerial(wanted)) {
                 writeOkay(out);
-                String next = readMessage(in);
+                String next = readDeviceServiceString(in);
                 d("host service", "transport next: " + next);
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();

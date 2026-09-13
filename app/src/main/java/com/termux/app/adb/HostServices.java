@@ -251,8 +251,58 @@ final class HostServices {
         }
 
         if (rest.startsWith("tport:serial:")) {
-            return mDeviceServices.handleDeviceService(socket, in, out,
-                rest.substring("tport:serial:".length()));
+            String wanted = rest.substring("tport:serial:".length());
+            // wanted format is "<serial>:<service>" or just "<serial>"
+            int serviceColon = wanted.indexOf(':');
+            if (serviceColon >= 0) {
+                // tport:serial:<serial>:<service> — serial-scoped device service
+                String wantedSerial = wanted.substring(0, serviceColon);
+                if (!DeviceServices.knownSerial(wantedSerial)) {
+                    writeFail(out, "device '" + wantedSerial + "' not found");
+                    return true;
+                }
+                mDeviceServices.handleDeviceService(socket, in, out,
+                    wanted.substring(serviceColon + 1));
+                throw new DeviceServices.NoQueryTailException();
+            }
+            // bare serial — OKAY then read next raw service string
+            if (!DeviceServices.knownSerial(wanted)) {
+                writeFail(out, "device '" + wanted + "' not found");
+                return true;
+            }
+            writeOkay(out);
+            String next = readDeviceServiceString(in);
+            mDeviceServices.handleDeviceService(socket, in, out, next);
+            throw new DeviceServices.NoQueryTailException();
+        }
+
+        // host:tport:any / :usb / :local — transport selection (like transport-any)
+        if (rest.equals("tport:any") || rest.equals("tport:usb") || rest.equals("tport:local")) {
+            String tportType = rest.substring("tport:".length());
+            d(service, "tport type=" + tportType);
+            if (DeviceServices.knownSerial(serial)) {
+                writeOkay(out);
+                String next = readDeviceServiceString(in);
+                d("host service", "tport:" + tportType + " next: " + next);
+                mDeviceServices.handleDeviceService(socket, in, out, next);
+                throw new DeviceServices.NoQueryTailException();
+            }
+            writeFail(out, "device not found");
+            return true;
+        }
+
+        // host:tport:<serial> — select by serial (catch-all for tport:)
+        if (rest.startsWith("tport:") && !rest.startsWith("tport:serial:")) {
+            String wanted = rest.substring("tport:".length());
+            if (SERIAL.equals(wanted) || DeviceServices.knownSerial(wanted)) {
+                writeOkay(out);
+                String next = readDeviceServiceString(in);
+                d("host service", "tport serial next: " + next);
+                mDeviceServices.handleDeviceService(socket, in, out, next);
+                throw new DeviceServices.NoQueryTailException();
+            }
+            writeFail(out, "device '" + wanted + "' not found");
+            return true;
         }
         switch (rest) {
             case "version":

@@ -100,7 +100,7 @@
   },
   "box64-libs": {
     "description": "x86_64 glibc runtime libraries (Ubuntu 24.04 amd64) extracted from official Ubuntu archive .debs. Covers libc, libgcc_s, libstdc++, zlib, openssl, curl, zstd, xz, bzip2, lz4, ffi, pcre/pcre2, expat, sqlite, xml2, ncurses/readline/edit, gmp/mpfr/mpc, atomic, uuid, png/jpeg/webp/tiff, freetype, fontconfig, glib, brotli, gnutls (idn2/unistring/psl/tasn1/nettle/hogweed/p11-kit), cap, X11/Xext/Xrender/Xrandr/Xi/Xfixes/Xinerama/Xcursor/Xkbcommon, wayland, icu, double-conversion, harfbuzz.",
-    "version": "libc6 2.39-0ubuntu8.8 + gcc-14 14.2.0 + 54 core/commonly-used x86_64 libraries",
+    "version": "libc6 2.39-0ubuntu8.9 + gcc-14 14.2.0-4ubuntu2~24.04.1 + 54 core/commonly-used x86_64 libraries",
     "architecture": "amd64 (for x86_64 emulation under box64)",
     "install_method": "prebuilt_deb_extract",
     "required_for_offline": true,
@@ -111,9 +111,9 @@
     "packages": [
       {
         "name": "libc6",
-        "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8.15_amd64.deb",
-        "sha256": "3b8d5391b6b484a4c81fd000b6064885ad967ec3cb966bc57603f3fb3ebf0ed5",
-        "filename": "libc6_2.39-0ubuntu8.15_amd64.deb"
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/glibc/libc6_2.39-0ubuntu8.9_amd64.deb",
+        "sha256": "ff5557d99b51f761c4b7c92368b9cc45565eda17df9bf9eb4b134d09825008be",
+        "filename": "libc6_2.39-0ubuntu8.9_amd64.deb"
       },
       {
         "name": "libgcc-s1",
@@ -130,21 +130,21 @@
       {
         "name": "zlib1g",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/z/zlib/zlib1g_1.3.dfsg-3.1ubuntu2.2_amd64.deb",
-        "sha256": "7074b6a2f6367a10d280c00a1cb02e74277709180bab4f2491a2f355ab2d6c20",
+        "sha256": "84b9cf5752b29c9f92c27cd4c4ba9bbcc70b5ccf9b1b515421a28ae23212e273",
         "filename": "zlib1g_1.3.dfsg-3.1ubuntu2.2_amd64.deb"
       },
       {
         "name": "libssl3t64",
         "version": "3.0.13-0ubuntu3.12",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/openssl/libssl3t64_3.0.13-0ubuntu3.15_amd64.deb",
-        "sha256": "6a963adb1106fca567d24d4a1e5da0bad25de79ac2564cd1ba846e677e1c951b",
+        "sha256": "3d0955bc049bbcca0f4c3e78a3a8b994593d96db7d84f4320217224433844534",
         "filename": "libssl3t64_3.0.13-0ubuntu3.15_amd64.deb"
       },
       {
         "name": "libcurl4t64",
         "version": "8.5.0-2ubuntu10.12",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/curl/libcurl4t64_8.5.0-2ubuntu10.13_amd64.deb",
-        "sha256": "18e1652370168e18acd2ffbdf0c23cdf02911b0a97960d2e3e459d077434cd88",
+        "sha256": "92347d034fdae018d67cab3cbe976255ec0ba936f57923241974bf3787addf04",
         "filename": "libcurl4t64_8.5.0-2ubuntu10.13_amd64.deb"
       },
       {
@@ -221,14 +221,14 @@
         "name": "libtinfo6",
         "version": "6.4+20240113-1ubuntu2.1",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/ncurses/libtinfo6_6.4+20240113-1ubuntu2.2_amd64.deb",
-        "sha256": "768e43c268e1e49b8dae7a50ed4778d6db88688abf72fdf779641e124c8a9a0b",
+        "sha256": "b67a6df2bdab61d273eabebd208bb6a3fb12618a390a067e1ee305a409ff03d9",
         "filename": "libtinfo6_6.4+20240113-1ubuntu2.2_amd64.deb"
       },
       {
         "name": "libncursesw6",
         "version": "6.4+20240113-1ubuntu2.1",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/ncurses/libncursesw6_6.4+20240113-1ubuntu2.2_amd64.deb",
-        "sha256": "bc860e63d1f8e653b1d14695ed5e3e8baf88b14c38ba0e6a93c67809a7c116a6",
+        "sha256": "579c9488755d1ddd70f66480cafd2f68776f68314d15d9cf4b5449d0de0fc968",
         "filename": "libncursesw6_6.4+20240113-1ubuntu2.2_amd64.deb"
       },
       {
@@ -276,9 +276,9 @@
       {
         "name": "libuuid1",
         "version": "2.39.3-9ubuntu6.5",
-        "url": "https://archive.ubuntu.com/ubuntu/pool/main/u/util-linux/libuuid1_2.39.3-9ubuntu6.5_amd64.deb",
-        "sha256": "2f801582b5f0e7cb0c2d3d3651193e69f4540ee3b7dcb6079a3562f0880b9edf",
-        "filename": "libuuid1_2.39.3-9ubuntu6.5_amd64.deb"
+        "url": "https://archive.ubuntu.com/ubuntu/pool/main/u/util-linux/libuuid1_2.39.3-9ubuntu6_amd64.deb",
+        "sha256": "4ba2c3a10469d1ab8e01a9af8e39093ed43addada658c04737287c5f91a1645b",
+        "filename": "libuuid1_2.39.3-9ubuntu6_amd64.deb"
       },
       {
         "name": "libpng16-16t64",
@@ -375,7 +375,7 @@
         "name": "libp11-kit0",
         "version": "0.25.3-4ubuntu2.1",
         "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/p11-kit/libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb",
-        "sha256": "151a0e70407faef701df3a283bca0b2f2e7aeb2b73e5682101bb5543e8213d98",
+        "sha256": "e7c58aeac19d89f5f1492dfaa52b8623bcd56edc40983f5243ad56d94f477bf2",
         "filename": "libp11-kit0_0.25.3-4ubuntu2.2_amd64.deb"
       },
       {
@@ -493,7 +493,7 @@
     ],
     "archive": {
       "filename": "box64-libs.tar.gz",
-      "sha256": "e85352bea73fd4f6708b45015133979b588afa145a9eaefd9d6ca0f89f53022a"
+      "sha256": "f38f892f89f931236937b192d3b54babdd3e4f6816162f16d792dd0eb981ccbe"
     }
   },
   "box64-layer": {

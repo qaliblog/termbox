@@ -56,6 +56,16 @@ final class HostServices {
     /** Set when host:kill unwinds the listener; suppresses the error log. */
     static final AtomicBoolean SHUTDOWN = new AtomicBoolean(false);
 
+    private static volatile boolean DEBUG = false;
+
+    static void setDebug(boolean on) {
+        DEBUG = on;
+    }
+
+    private static void d(String svc, String msg) {
+        if (DEBUG) TermboxAdbBridge.logDebug("HostServices", svc + ": " + msg);
+    }
+
     private final DeviceServices mDeviceServices = new DeviceServices();
     private final ForwardRegistry mForwards = new ForwardRegistry();
 
@@ -139,16 +149,25 @@ final class HostServices {
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
             String service = readMessage(in);
+            d(service, "smart proto service received");
             boolean handled = handleService(socket, in, out, service);
-            if (handled) writeQueryTail(out);
+            if (handled) {
+                // Device services already signalled NoQueryTailException;
+                // only query-style services reach here.
+                d(service, "writing query tail 0000");
+                writeQueryTail(out);
+            }
             return handled;
         } catch (DeviceServices.NoQueryTailException ignored) {
             // Raw device service: the "0000" tail must not be appended.
+            d(service, "device service finished (no tail)");
             return true;
         } catch (ShutdownException e) {
             // Reply already completed inside handleService.
+            d(service, "shutdown");
             return true;
         } catch (Exception e) {
+            d(service, "error: " + e);
             return false;
         }
     }
@@ -159,16 +178,26 @@ final class HostServices {
         String serial = null;
         String rest;
 
-        if (service.startsWith("host-serial:")) {
-            int idx = service.indexOf(':', "host-serial:".length());
+        if (service.startsWith("host-serial:") || service.startsWith("host-usb:") || service.startsWith("host-local:")) {
+            int prefixLen = service.startsWith("host-serial:") ? "host-serial:".length()
+                    : service.startsWith("host-usb:") ? "host-usb:".length()
+                    : "host-local:".length();
+            int idx = service.indexOf(':', prefixLen);
             if (idx < 0) return false;
-            serial = service.substring("host-serial:".length(), idx);
+            serial = service.substring(prefixLen, idx);
             rest = service.substring(idx + 1);
-        } else if (service.startsWith("host-usb:") || service.startsWith("host-local:")) {
-            int idx = service.indexOf(':', 10);
-            if (idx < 0) return false;
-            serial = service.substring(10, idx);
-            rest = service.substring(idx + 1);
+            // If rest is a device service, delegate immediately (host-serial:SERIAL:device_service).
+            if (isDeviceService(rest)) {
+                d(service, "host-serial device service rest=" + rest + " serial=" + serial);
+                if (!DeviceServices.knownSerial(serial)) {
+                    writeFail(out, "device '" + serial + "' not found");
+                    return true;
+                }
+                writeOkay(out);
+                mDeviceServices.handleDeviceService(socket, in, out, rest);
+                throw new DeviceServices.NoQueryTailException();
+            }
+            // Otherwise, fall through to host service handling with the parsed serial.
         } else if (service.startsWith("host:")) {
             rest = service.substring("host:".length());
         } else {
@@ -179,9 +208,11 @@ final class HostServices {
         // Transport selection: OKAY, then the client sends the device service
         // string on the same socket (AOSP handle_transport_request).
         if (rest.equals("transport-any")) {
+            d(service, "transport-any serial=" + serial);
             if (DeviceServices.knownSerial(serial)) {
                 writeOkay(out);
                 String next = readMessage(in);
+                d(next, "transport-any next service");
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();
             }
@@ -190,9 +221,11 @@ final class HostServices {
         }
         if (rest.startsWith("transport:")) {
             String wanted = rest.substring("transport:".length());
-            if (SERIAL.equals(wanted)) {
+            d(service, "transport serial=" + serial + " wanted=" + wanted);
+            if (SERIAL.equals(wanted) || DeviceServices.knownSerial(wanted)) {
                 writeOkay(out);
                 String next = readMessage(in);
+                d(next, "transport next service");
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();
             }
@@ -278,10 +311,28 @@ final class HostServices {
         }
         if (serial != null) {
             // Any other serial-scoped query on our single device.
+            d(service, "unhandled serial-scoped: " + rest + " serial=" + serial);
             writeFail(out, "device '" + serial + "' not found");
             return true;
         }
+        d(service, "unknown service, returning false");
         return false;
+    }
+
+    /**
+     * Returns true if the given service string is a device service (shell/exec/sync/
+     * reverse/track-jdwp/transport-connect) that should be delegated to
+     * DeviceServices rather than handled as a host query.
+     */
+    private static boolean isDeviceService(String service) {
+        return service.equals("sync:")
+            || service.startsWith("shell")
+            || service.startsWith("exec:")
+            || service.startsWith("reverse:")
+            || service.equals("track-jdwp")
+            || service.startsWith("tcp:")
+            || service.startsWith("local:")
+            || service.startsWith("localabstract:");
     }
 
     /** Long-lived host:track-devices stream. */
@@ -291,6 +342,7 @@ final class HostServices {
         // "device", so the stream just stays open until the client closes it.
         byte[] buf = new byte[4096];
         while (in.read(buf) != -1) { /* client went away */ }
+        d("track-devices", "client closed");
     }
 
     /** Thrown to unwind the connection when host:kill shuts the server down. */

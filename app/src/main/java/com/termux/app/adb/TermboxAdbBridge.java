@@ -50,6 +50,17 @@ public final class TermboxAdbBridge {
         PackageInstallerBridge.init(app);
         sSyncPaths = new FileSyncPaths(app);
 
+        // Enable debug logging if the app's log level is VERBOSE.
+        try {
+            com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences prefs =
+                com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences.build(app);
+            if (prefs != null && prefs.getLogLevel() >= com.termux.shared.logger.Logger.LOG_LEVEL_VERBOSE) {
+                HostServices.setDebug(true);
+            }
+        } catch (Throwable e) {
+            // Ignore; debug will remain off.
+        }
+
         if (sServer != null && sServer.isRunning()) return;
 
         AdbServer server = new AdbServer(DEFAULT_PORT);

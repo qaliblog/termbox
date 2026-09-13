@@ -141,22 +141,39 @@ static int write_full(int fd, const void* buf, size_t n) {
  * reason copied into err, if provided) or transport error. */
 static int read_status(int fd, char* err, size_t errlen) {
     char code[4];
-    if (!read_full(fd, code, 4)) return -1;
+    if (!read_full(fd, code, 4)) {
+        if (err && errlen) snprintf(err, errlen, "couldn't read status");
+        return -1;
+    }
     if (memcmp(code, "OKAY", 4) == 0) return 0;
     if (memcmp(code, "FAIL", 4) == 0) {
         if (err && errlen) {
             char lenbuf[5];
             lenbuf[4] = 0;
-            if (!read_full(fd, lenbuf, 4)) return -1;
+            if (!read_full(fd, lenbuf, 4)) {
+                if (err && errlen) snprintf(err, errlen, "couldn't read status");
+                return -1;
+            }
             unsigned len = 0;
             sscanf(lenbuf, "%4x", &len);
             if (len >= errlen) len = (unsigned)(errlen - 1);
-            if (len && !read_full(fd, err, len)) return -1;
+            if (len && !read_full(fd, err, len)) {
+                if (err && errlen) snprintf(err, errlen, "couldn't read status");
+                return -1;
+            }
             err[len] = 0;
         }
         return -1;
     }
-    if (err && errlen) snprintf(err, errlen, "unknown reply code");
+    if (err && errlen) {
+        /* Provide the exact bytes seen so failure is debuggable. */
+        char tmp[32];
+        size_t n = sizeof(tmp) - 1;
+        if (n > 4) n = 4;
+        memcpy(tmp, code, n);
+        tmp[n] = 0;
+        snprintf(err, errlen, "unknown reply code (%s)", tmp);
+    }
     return -1;
 }
 
@@ -181,6 +198,7 @@ static char* adb_query(const char* service, int* ok, char* err, size_t errlen) {
     char lenbuf[5];
     lenbuf[4] = 0;
     if (!read_full(fd, lenbuf, 4)) {
+        if (err && errlen) snprintf(err, errlen, "couldn't read status");
         close(fd);
         return NULL;
     }
@@ -192,6 +210,7 @@ static char* adb_query(const char* service, int* ok, char* err, size_t errlen) {
         if (!payload || !read_full(fd, payload, len)) {
             free(payload);
             close(fd);
+            if (err && errlen) snprintf(err, errlen, "couldn't read status");
             return NULL;
         }
         payload[len] = 0;
@@ -205,7 +224,10 @@ static char* adb_query(const char* service, int* ok, char* err, size_t errlen) {
     return payload ? payload : strdup("");
 }
 
-/* Open a service stream: OKAY returns the raw fd, FAIL returns -1 with err. */
+/* Open a service stream: OKAY returns the raw fd, FAIL returns -1 with err.
+ * This is used for device services (shell/exec/sync/track-jdwp/transport).
+ * The caller owns the stream and must not expect a trailing 0000.
+ */
 static int adb_connect_service(const char* service, char* err, size_t errlen) {
     int fd = socket_connect_server();
     if (fd < 0) {
@@ -217,6 +239,22 @@ static int adb_connect_service(const char* service, char* err, size_t errlen) {
         return -1;
     }
     return fd;
+}
+
+/* Debug toggle: set ADB_DEBUG=1 to print protocol details to stderr. */
+static int debug_mode(void) {
+    const char* e = getenv("ADB_DEBUG");
+    return e && *e;
+}
+
+static void debug_print(const char* fmt, ...) {
+    if (!debug_mode()) return;
+    va_list ap;
+    va_start(ap, fmt);
+    fprintf(stderr, "[adb-debug] ");
+    vfprintf(stderr, fmt, ap);
+    fprintf(stderr, "\n");
+    va_end(ap);
 }
 
 /* Ensure a server is running; prints Google's daemon messages. Returns 0 when
@@ -421,7 +459,10 @@ static char* shell_service_string(int use_shell_protocol, const char* type_arg,
     }
     size_t need = 8 + strlen(args) + strlen(command) + 1;
     char* s = (char*)malloc(need);
-    snprintf(s, need, "shell%s%s:%s", args[0] ? "," : "", args, command);
+    if (s) {
+        snprintf(s, need, "shell%s%s:%s", args[0] ? "," : "", args, command);
+        debug_print("shell_service_string -> '%s'", s);
+    }
     return s;
 }
 
@@ -451,12 +492,18 @@ static void* stdin_read_loop_legacy(void* arg) {
 static int remote_shell(int use_shell_protocol, const char* type_arg, char escape_char,
                         int empty_command, const char* command) {
     char* service = shell_service_string(use_shell_protocol, type_arg, command);
+    if (!service) {
+        fprintf(stderr, "error: memory\n");
+        return 1;
+    }
     int fd = adb_connect_service(service, NULL, 0);
     free(service);
     if (fd < 0) {
         fprintf(stderr, "error: closed\n");
         return 1;
     }
+    debug_print("remote_shell fd=%d use_shell_protocol=%d type_arg='%s' command='%s'",
+                fd, use_shell_protocol, type_arg, command);
 
     if (!use_shell_protocol) {
         int raw_stdin = (type_arg[0] == 0 && empty_command);
@@ -504,6 +551,7 @@ static int remote_shell(int use_shell_protocol, const char* type_arg, char escap
 
     int code = shell_output_loop(p);
     if (raw_stdin) stdin_raw_restore();
+    debug_print("remote_shell exit=%d", code);
     return code;
 }
 
@@ -961,6 +1009,8 @@ static int cmd_shell(int argc, char** argv) {
         }
         optind = i + 1;
     }
+    debug_print("cmd_shell opts: use_shell_protocol=%d escape='%c' tty=%d",
+                use_shell_protocol, escape_char, tty);
 
     const char* command = "";
     if (optind < argc) {

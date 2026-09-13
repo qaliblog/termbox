@@ -208,7 +208,7 @@ final class DeviceServices {
         try {
             engine = runner.startPipe(command);
         } catch (IOException e) {
-            TermboxAdbBridge.logWarn(LOG_TAG, "Pipe shell failed, falling back to PTY: " + e);
+            TermboxAdbBridge.logWarn(TermboxAdbBridge.LOG_TAG, "Pipe shell failed, falling back to PTY: " + e);
             runPtyShellFallback(runner, in, out, command, v2, term);
             return;
         }
@@ -242,7 +242,7 @@ final class DeviceServices {
     private static void sendShellError(OutputStream out, String msg) {
         try {
             byte[] data = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            ShellProtocol.writePacket(out, ShellProtocol.ID_STDERR, data);
+            ShellProtocol.writePacket(out, ShellProtocol.ID_STDERR, data, 0, data.length);
             ShellProtocol.writeExit(out, 1);
         } catch (IOException ignored) {
         }
@@ -337,7 +337,7 @@ final class DeviceServices {
         try {
             engine = runner.startExec(command);
         } catch (IOException e) {
-            TermboxAdbBridge.logWarn(LOG_TAG, "Exec failed: " + e);
+            TermboxAdbBridge.logWarn(TermboxAdbBridge.LOG_TAG, "Exec failed: " + e);
             String msg = "Exec failed: " + e.getMessage();
             out.write(msg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             out.flush();

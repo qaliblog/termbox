@@ -182,7 +182,7 @@ final class DeviceServices {
                 // PTY unavailable (libadbpty not loadable): fall back to pipes,
                 // which is what adbd does when the pty provider fails.
                 d(service, "pty unavailable, falling back to pipe", service);
-                runPipeShell(runner, in, out, effectiveCommand, v2);
+                runPipeShell(runner, in, out, effectiveCommand, v2, term);
                 throw new NoQueryTailException();
             }
             final InputStream fin = in;
@@ -198,19 +198,54 @@ final class DeviceServices {
             engine.kill(); // if output EOF'd early, ensure the child is gone
             throw new NoQueryTailException();
         }
-        runPipeShell(runner, in, out, effectiveCommand, v2);
+        runPipeShell(runner, in, out, effectiveCommand, v2, term);
         throw new NoQueryTailException();
     }
 
     private static void runPipeShell(ShellRunner runner, InputStream in, OutputStream out,
-                                     String command, boolean v2) throws IOException {
-        ShellRunner.PipeEngine engine = runner.startPipe(command);
+                                     String command, boolean v2, String term) throws IOException {
+        ShellRunner.PipeEngine engine;
+        try {
+            engine = runner.startPipe(command);
+        } catch (IOException e) {
+            TermboxAdbBridge.logWarn(LOG_TAG, "Pipe shell failed, falling back to PTY: " + e);
+            runPtyShellFallback(runner, in, out, command, v2, term);
+            return;
+        }
         Thread stdinThread = new Thread(() -> pumpShellStdin(in, engine, v2, false),
             "adb-shell-stdin");
         stdinThread.setDaemon(true);
         stdinThread.start();
         engine.run(out);
         engine.kill();
+    }
+
+    private static void runPtyShellFallback(ShellRunner runner, InputStream in, OutputStream out,
+                                             String command, boolean v2, String term) {
+        try {
+            ShellRunner.PtyEngine engine = runner.startPty(command, term, 0, 0);
+            if (engine == null) {
+                sendShellError(out, "PTY unavailable and pipe failed");
+                return;
+            }
+            Thread stdinThread = new Thread(() -> pumpShellStdin(in, engine, v2, true),
+                "adb-shell-stdin");
+            stdinThread.setDaemon(true);
+            stdinThread.start();
+            engine.run(out);
+            engine.kill();
+        } catch (IOException e) {
+            sendShellError(out, "PTY fallback failed: " + e);
+        }
+    }
+
+    private static void sendShellError(OutputStream out, String msg) {
+        try {
+            byte[] data = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            ShellProtocol.writePacket(out, ShellProtocol.ID_STDERR, data);
+            ShellProtocol.writeExit(out, 1);
+        } catch (IOException ignored) {
+        }
     }
 
     /**
@@ -298,7 +333,16 @@ final class DeviceServices {
         }
         // Real execution with merged stderr (exec: cannot separate streams).
         ShellRunner runner = new ShellRunner();
-        ShellRunner.PipeEngine engine = runner.startExec(command);
+        ShellRunner.PipeEngine engine;
+        try {
+            engine = runner.startExec(command);
+        } catch (IOException e) {
+            TermboxAdbBridge.logWarn(LOG_TAG, "Exec failed: " + e);
+            String msg = "Exec failed: " + e.getMessage();
+            out.write(msg.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.flush();
+            throw new NoQueryTailException();
+        }
         d(command, "executing via sh -c", command);
         engine.runRaw(out);
         engine.kill();

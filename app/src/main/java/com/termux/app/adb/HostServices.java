@@ -197,7 +197,6 @@ final class HostServices {
                     writeFail(out, "device '" + serial + "' not found");
                     return true;
                 }
-                writeOkay(out);
                 mDeviceServices.handleDeviceService(socket, in, out, rest);
                 throw new DeviceServices.NoQueryTailException();
             }
@@ -272,8 +271,14 @@ final class HostServices {
             case "get-state":
                 writeOkayPayload(out, "device");
                 return true;
+            case "get-serialno":
+                writeOkayPayload(out, SERIAL);
+                return true;
             case "get-devpath":
                 writeOkayPayload(out, SERIAL);
+                return true;
+            case "get-transport-id":
+                writeOkayPayload(out, "1");
                 return true;
             case "get-product":
                 writeOkayPayload(out, "termbox");

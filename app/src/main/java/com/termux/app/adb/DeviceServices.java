@@ -83,7 +83,8 @@ final class DeviceServices {
             return handleExec(in, out, service.substring("exec:".length()));
         }
         if (service.startsWith("reverse:")) {
-            return handleReverse(out, service.substring("reverse:".length()));
+            handleReverse(out, service.substring("reverse:".length()));
+            return true;
         }
         if (service.equals("track-jdwp")) {
             // No debuggable VMs are visible to this bridge: an empty stream.
@@ -312,23 +313,23 @@ final class DeviceServices {
      * endpoint. Since bridge "device" and "host" are the same process, this
      * mirrors ForwardRegistry with swapped specs.
      */
-    private static boolean handleReverse(OutputStream out, String spec) throws IOException {
+    private static void handleReverse(OutputStream out, String spec) throws IOException {
         if (spec.startsWith("list-forward")) {
             HostServices.writeOkay(out);
             HostServices.writeMessage(out, ForwardRegistry.listForward(null));
-            return true;
+            throw new NoQueryTailException();
         }
         if (spec.equals("killforward-all")) {
             ForwardRegistry.killForwardAll();
             HostServices.writeOkay(out);
-            return true;
+            throw new NoQueryTailException();
         }
         if (spec.startsWith("killforward")) {
             String local = spec.substring("killforward".length());
             if (local.startsWith(":")) local = local.substring(1);
             ForwardRegistry.killForward(local);
             HostServices.writeOkay(out);
-            return true;
+            throw new NoQueryTailException();
         }
         if (spec.startsWith("forward")) {
             String rest = spec.substring("forward".length());
@@ -337,19 +338,17 @@ final class DeviceServices {
             int semi = rest.indexOf(';');
             if (semi < 0) {
                 HostServices.writeFail(out, "invalid reverse spec");
-                return true;
+                throw new NoQueryTailException();
             }
             String remote = rest.substring(0, semi);
             String local = rest.substring(semi + 1);
-            // Device listens on remote; connects to host local endpoint.
             if (!ForwardRegistry.addForward(null, remote, local)) {
                 HostServices.writeFail(out, "cannot rebind existing adb server socket");
-                return true;
+                throw new NoQueryTailException();
             }
             HostServices.writeOkay(out);
-            return true;
+            throw new NoQueryTailException();
         }
-        return false;
     }
 
     // ---------- transport connect ----------

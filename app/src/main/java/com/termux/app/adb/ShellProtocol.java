@@ -39,9 +39,11 @@ final class ShellProtocol {
         byte[] header = new byte[5];
         header[0] = id;
         putLe32(header, 1, len);
-        out.write(header);
-        if (len > 0) out.write(data, off, len);
-        out.flush();
+        synchronized (out) {
+            out.write(header);
+            if (len > 0) out.write(data, off, len);
+            out.flush();
+        }
     }
 
     static void writeExit(OutputStream out, int exitCode) throws IOException {

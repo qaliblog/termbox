@@ -46,8 +46,8 @@ final class DeviceServices {
     DeviceServices() {
     }
 
-    private static void d(String svc, String msg) {
-        if (HostServices.DEBUG) TermboxAdbBridge.logDebug("DeviceServices", svc + ": " + msg);
+    private static void d(String svc, String msg, String ctx) {
+        if (HostServices.isDebugEnabled()) TermboxAdbBridge.logDebug("DeviceServices", svc + ": " + msg + " ctx=" + ctx);
     }
 
 
@@ -70,7 +70,7 @@ final class DeviceServices {
     /** Dispatch a device service string. Always a raw stream on success. */
     static boolean handleDeviceService(Socket socket, InputStream in, OutputStream out,
                                        String service) throws IOException {
-        d(service, "device service dispatch");
+        d(service, "device service dispatch", service);
         if (service.equals("sync:")) {
             HostServices.writeOkay(out);
             FileSyncService.serve(in, out);
@@ -136,7 +136,7 @@ final class DeviceServices {
         // runs the real Android binary via sh -c.
         DeviceCommandHandlers.Result emulated = DeviceCommandHandlers.handle(command);
         if (emulated != null) {
-            d(service, "emulated command exit=" + emulated.mExit);
+            d(service, "emulated command exit=" + emulated.mExit, service);
             HostServices.writeOkay(out);
             if (v2) {
                 byte[] data = emulated.mStdout.getBytes(
@@ -171,7 +171,7 @@ final class DeviceServices {
         boolean usePty = raw ? false : (pty || !v2);
         // An empty command means a login shell on the device.
         String effectiveCommand = command.isEmpty() ? "sh" : command;
-        d(service, "executing command via sh -c (pty=" + usePty + " v2=" + v2 + " command=" + effectiveCommand + ")");
+        d(service, "executing command via sh -c (pty=" + usePty + " v2=" + v2 + " command=" + effectiveCommand + ")", service);
 
         HostServices.writeOkay(out);
 
@@ -180,7 +180,7 @@ final class DeviceServices {
             if (engine == null) {
                 // PTY unavailable (libadbpty not loadable): fall back to pipes,
                 // which is what adbd does when the pty provider fails.
-                d(service, "pty unavailable, falling back to pipe");
+                d(service, "pty unavailable, falling back to pipe", service);
                 runPipeShell(runner, in, out, effectiveCommand, v2);
                 throw new NoQueryTailException();
             }
@@ -192,7 +192,7 @@ final class DeviceServices {
                 "adb-shell-stdin");
             stdinThread.setDaemon(true);
             stdinThread.start();
-            d(service, "pty shell started pid=" + fengine.mPid);
+            d(service, "pty shell started pid=" + fengine.mPid, service);
             engine.run(out);
             engine.kill(); // if output EOF'd early, ensure the child is gone
             throw new NoQueryTailException();
@@ -277,19 +277,19 @@ final class DeviceServices {
      */
     private static boolean handleExec(InputStream in, OutputStream out, String command)
         throws IOException {
-        d(command, "exec");
+        d(command, "exec", command);
         HostServices.writeOkay(out);
         String trimmed = command.trim();
         if (trimmed.startsWith("cmd package ")) {
             PackageManagerService pkg = new PackageManagerService();
             pkg.handleCmdPackage(trimmed.substring("cmd ".length()), in, out);
-            d(command, "cmd package done");
+            d(command, "cmd package done", command);
             out.flush();
             throw new NoQueryTailException();
         }
         DeviceCommandHandlers.Result emulated = DeviceCommandHandlers.handle(command);
         if (emulated != null) {
-            d(command, "emulated exec exit=" + emulated.mExit);
+            d(command, "emulated exec exit=" + emulated.mExit, command);
             out.write((emulated.mStdout + (emulated.mStderr == null ? ""
                 : emulated.mStderr)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
             out.flush();
@@ -298,7 +298,7 @@ final class DeviceServices {
         // Real execution with merged stderr (exec: cannot separate streams).
         ShellRunner runner = new ShellRunner();
         ShellRunner.PipeEngine engine = runner.startExec(command);
-        d(command, "executing via sh -c");
+        d(command, "executing via sh -c", command);
         engine.runRaw(out);
         engine.kill();
         throw new NoQueryTailException();

@@ -62,6 +62,10 @@ final class HostServices {
         DEBUG = on;
     }
 
+    static boolean isDebugEnabled() {
+        return DEBUG;
+    }
+
     private static void d(String svc, String msg) {
         if (DEBUG) TermboxAdbBridge.logDebug("HostServices", svc + ": " + msg);
     }
@@ -149,25 +153,25 @@ final class HostServices {
             InputStream in = socket.getInputStream();
             OutputStream out = socket.getOutputStream();
             String service = readMessage(in);
-            d(service, "smart proto service received");
+            d("smart proto", "service received: " + service);
             boolean handled = handleService(socket, in, out, service);
             if (handled) {
                 // Device services already signalled NoQueryTailException;
                 // only query-style services reach here.
-                d(service, "writing query tail 0000");
+                d("host service", "writing query tail for: " + service);
                 writeQueryTail(out);
             }
             return handled;
         } catch (DeviceServices.NoQueryTailException ignored) {
             // Raw device service: the "0000" tail must not be appended.
-            d(service, "device service finished (no tail)");
+            d("smart proto", "device service finished (no tail)");
             return true;
         } catch (ShutdownException e) {
             // Reply already completed inside handleService.
-            d(service, "shutdown");
+            d("smart proto", "shutdown");
             return true;
         } catch (Exception e) {
-            d(service, "error: " + e);
+            d("smart proto", "error: " + e);
             return false;
         }
     }
@@ -188,7 +192,7 @@ final class HostServices {
             rest = service.substring(idx + 1);
             // If rest is a device service, delegate immediately (host-serial:SERIAL:device_service).
             if (isDeviceService(rest)) {
-                d(service, "host-serial device service rest=" + rest + " serial=" + serial);
+                d("host service", "host-serial device service rest=" + rest + " serial=" + serial);
                 if (!DeviceServices.knownSerial(serial)) {
                     writeFail(out, "device '" + serial + "' not found");
                     return true;
@@ -212,7 +216,7 @@ final class HostServices {
             if (DeviceServices.knownSerial(serial)) {
                 writeOkay(out);
                 String next = readMessage(in);
-                d(next, "transport-any next service");
+                d("host service", "transport-any next: " + next);
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();
             }
@@ -225,7 +229,7 @@ final class HostServices {
             if (SERIAL.equals(wanted) || DeviceServices.knownSerial(wanted)) {
                 writeOkay(out);
                 String next = readMessage(in);
-                d(next, "transport next service");
+                d("host service", "transport next: " + next);
                 mDeviceServices.handleDeviceService(socket, in, out, next);
                 throw new DeviceServices.NoQueryTailException();
             }
@@ -311,11 +315,11 @@ final class HostServices {
         }
         if (serial != null) {
             // Any other serial-scoped query on our single device.
-            d(service, "unhandled serial-scoped: " + rest + " serial=" + serial);
+            d("host service", "unhandled serial-scoped: " + rest + " serial=" + serial);
             writeFail(out, "device '" + serial + "' not found");
             return true;
         }
-        d(service, "unknown service, returning false");
+        d("host service", "unknown service, returning false");
         return false;
     }
 
@@ -342,7 +346,7 @@ final class HostServices {
         // "device", so the stream just stays open until the client closes it.
         byte[] buf = new byte[4096];
         while (in.read(buf) != -1) { /* client went away */ }
-        d("track-devices", "client closed");
+        d("host service", "track-devices client closed");
     }
 
     /** Thrown to unwind the connection when host:kill shuts the server down. */

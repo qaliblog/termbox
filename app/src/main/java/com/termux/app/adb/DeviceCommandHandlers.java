@@ -205,7 +205,6 @@ class DeviceCommandHandlers {
             boolean system = (app.flags & android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0;
             if (showOnlySystem && !system) continue;
             if (showOnlyThirdParty && system) continue;
-            java.util.Objects.requireNonNull(null); // type sentinel
             boolean enabled = applicationInfoEnabled(app);
             if (showDisabled && enabled) continue;
             if (showEnabled && !enabled) continue;
@@ -239,6 +238,6 @@ class DeviceCommandHandlers {
     }
 
     private static boolean applicationInfoEnabled(android.content.pm.ApplicationInfo app) {
-        return app.enabled ? false : true;
+        return app.enabled;
     }
 }

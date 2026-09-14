@@ -82,6 +82,13 @@ final class ShellRunner {
 
     /** Run on a PTY. Returns null if PTY mode is unavailable. */
     PtyEngine startPty(String command, String term, int rows, int cols) {
+        // A missing library raises UnsatisfiedLinkError (an Error) — check the
+        // load flag first so callers get the null -> pipe fallback instead of
+        // the connection thread dying mid-protocol.
+        if (!AdbPty.isLoaded()) {
+            TermboxAdbBridge.logWarn(LOG_TAG, "PTY unavailable: libadbpty not loaded");
+            return null;
+        }
         int[] result = AdbPty.nativeForkPty(
             new String[] {"/system/bin/sh", "-c", command},
             defaultEnvironment(term), rows, cols);

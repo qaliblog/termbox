@@ -137,23 +137,26 @@ final class FileSyncService {
             out.flush();
             return;
         }
-        // v2: sync_stat_v2 { id, error, dev, ino, nlink, mode, uid, gid, size,
-        // atime, mtime, ctime } — 65 bytes. Capabilities the app cannot see
-        // (dev/ino/uid/gid of other uids' files) are reported honestly as 0.
-        byte[] st = new byte[65];
+        // v2: sync_stat_v2 { id, error, dev, ino, mode, nlink, uid, gid, size,
+        // atime, mtime, ctime } — 72 packed bytes (file_sync_protocol.h). Capabilities
+        // the app cannot see (dev/ino/uid/gid of other uids' files) are reported
+        // honestly as 0.
+        byte[] st = new byte[72];
         putLe32(st, 0, reqId);
-        st[4] = (byte) errno;
         if (errno == 0) {
-            putLe64(st, 5, 0); // dev
-            putLe64(st, 13, f.hashCode() & 0xffffffffL); // ino (opaque, non-zero)
-            putLe32(st, 21, 1); // nlink
-            putLe32(st, 25, mode);
-            putLe32(st, 29, myUid());
-            putLe32(st, 33, myUid());
-            putLe64(st, 37, size);
-            putLe64(st, 45, mtime); // atime
-            putLe64(st, 53, mtime); // mtime
-            putLe64(st, 61, mtime); // ctime
+            // st[4..7] = error = 0
+            putLe64(st, 8, 0);                                   // dev
+            putLe64(st, 16, f.hashCode() & 0xffffffffL);         // ino (opaque, non-zero)
+            putLe32(st, 24, mode);
+            putLe32(st, 28, 1);                                  // nlink
+            putLe32(st, 32, myUid());
+            putLe32(st, 36, myUid());
+            putLe64(st, 40, size);
+            putLe64(st, 48, mtime);                              // atime
+            putLe64(st, 56, mtime);                              // mtime
+            putLe64(st, 64, mtime);                              // ctime
+        } else {
+            putLe32(st, 4, errno);
         }
         out.write(st);
         out.flush();
@@ -206,21 +209,24 @@ final class FileSyncService {
                 putLe32(frame, 16, nameBytes.length);
                 System.arraycopy(nameBytes, 0, frame, 20, nameBytes.length);
             } else {
-                // sync_dent_v2 { id, error, dev, ino, nlink, mode, uid, gid,
-                // size, mtime, namelen, name }
-                frame = new byte[68 + nameBytes.length];
+                // sync_dent_v2 { id, error, dev, ino, mode, nlink, uid, gid,
+                // size, atime, mtime, ctime, namelen, name } — 76 packed bytes
+                // + name (file_sync_protocol.h).
+                frame = new byte[76 + nameBytes.length];
                 putLe32(frame, 0, ID_DENT_V2);
-                frame[4] = 0; // error
-                putLe64(frame, 5, 0); // dev
-                putLe64(frame, 13, entry.hashCode() & 0xffffffffL); // ino
-                putLe32(frame, 21, 1); // nlink
-                putLe32(frame, 25, mode);
-                putLe32(frame, 29, myUid());
-                putLe32(frame, 33, myUid());
-                putLe64(frame, 37, size);
-                putLe64(frame, 45, mtime);
-                putLe32(frame, 53, nameBytes.length);
-                System.arraycopy(nameBytes, 0, frame, 57, nameBytes.length);
+                // frame[4..7] = error = 0
+                putLe64(frame, 8, 0);                            // dev
+                putLe64(frame, 16, entry.hashCode() & 0xffffffffL); // ino
+                putLe32(frame, 24, mode);
+                putLe32(frame, 28, 1);                           // nlink
+                putLe32(frame, 32, myUid());
+                putLe32(frame, 36, myUid());
+                putLe64(frame, 40, size);
+                putLe64(frame, 48, mtime);                       // atime
+                putLe64(frame, 56, mtime);                       // mtime
+                putLe64(frame, 64, mtime);                       // ctime
+                putLe32(frame, 72, nameBytes.length);
+                System.arraycopy(nameBytes, 0, frame, 76, nameBytes.length);
             }
             out.write(frame);
         }

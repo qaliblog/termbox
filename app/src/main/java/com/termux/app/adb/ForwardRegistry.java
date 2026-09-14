@@ -43,14 +43,21 @@ final class ForwardRegistry {
 
     // ---------- registry (host:forward / reverse:forward semantics) ----------
 
-    /** Register a listener for local;remote. Returns false if rebinding is refused. */
-    static boolean addForward(String serial, String local, String remote) {
+    /**
+     * Register a listener for local;remote.
+     *
+     * Returns the resolved TCP port for a "tcp:0" local endpoint (the AOSP
+     * handle_forward_request contract: the port actually bound), 0 for every
+     * other endpoint type (no port string is sent in the reply), or -1 if the
+     * listener could not be installed (rebinding refused / bind failure).
+     */
+    static int addForward(String serial, String local, String remote) {
         synchronized (sLock) {
             // Refuse rebinding an existing local endpoint (norebind semantics
             // are the default in modern adb).
             for (Forward f : sForwards) {
                 if (f.localSpec.equals(local)) {
-                    return false;
+                    return -1;
                 }
             }
             Forward f;
@@ -59,11 +66,11 @@ final class ForwardRegistry {
             } catch (IOException e) {
                 TermboxAdbBridge.logWarn(LOG_TAG,
                     "forward " + local + " failed: " + e.getMessage());
-                return false;
+                return -1;
             }
             sForwards.add(f);
             f.start();
-            return true;
+            return f.resolvedTcpPort;
         }
     }
 
@@ -116,6 +123,8 @@ final class ForwardRegistry {
         final String serial;
         final String localSpec;
         final String remoteSpec;
+        /** Port actually bound for a tcp:0 listener; 0 otherwise. */
+        final int resolvedTcpPort;
         private final Listener mListener;
         private Thread mThread;
         private volatile boolean mRunning;
@@ -124,7 +133,9 @@ final class ForwardRegistry {
             this.serial = serial;
             this.localSpec = localSpec;
             this.remoteSpec = remoteSpec;
-            this.mListener = openListener(localSpec);
+            ListenerAndPort lp = openListener(localSpec);
+            this.mListener = lp.listener;
+            this.resolvedTcpPort = lp.port;
         }
 
         void start() {
@@ -237,13 +248,25 @@ final class ForwardRegistry {
         void close() throws IOException;
     }
 
-    private static Listener openListener(String spec) throws IOException {
+    /** A listener plus the TCP port it actually bound (0 when not a tcp listener). */
+    private static final class ListenerAndPort {
+        final Listener listener;
+        final int port;
+
+        ListenerAndPort(Listener listener, int port) {
+            this.listener = listener;
+            this.port = port;
+        }
+    }
+
+    private static ListenerAndPort openListener(String spec) throws IOException {
         if (spec.startsWith("tcp:")) {
             int port = parsePort(spec);
             ServerSocket ss = new ServerSocket();
             ss.setReuseAddress(true);
             ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port));
-            return new Listener() {
+            final int bound = ss.getLocalPort();
+            return new ListenerAndPort(new Listener() {
                 @Override
                 public Connection accept() throws IOException {
                     return new TcpConnection(ss.accept());
@@ -253,11 +276,11 @@ final class ForwardRegistry {
                 public void close() throws IOException {
                     ss.close();
                 }
-            };
+            }, bound);
         }
         if (spec.startsWith("localabstract:")) {
             LocalServerSocket ls = new LocalServerSocket(spec.substring("localabstract:".length()));
-            return new Listener() {
+            return new ListenerAndPort(new Listener() {
                 @Override
                 public Connection accept() throws IOException {
                     return new LocalConnection(ls.accept());
@@ -267,14 +290,14 @@ final class ForwardRegistry {
                 public void close() throws IOException {
                     ls.close();
                 }
-            };
+            }, 0);
         }
         if (spec.startsWith("local:")) {
             LocalServerSocket ls = new LocalServerSocket(spec.substring("local:".length()));
             // Note: LocalServerSocket(String) binds an abstract socket; for a
             // filesystem path the name must carry the path, which the platform
             // maps through LocalSocketAddress parsing of the same string form.
-            return new Listener() {
+            return new ListenerAndPort(new Listener() {
                 @Override
                 public Connection accept() throws IOException {
                     return new LocalConnection(ls.accept());
@@ -284,7 +307,7 @@ final class ForwardRegistry {
                 public void close() throws IOException {
                     ls.close();
                 }
-            };
+            }, 0);
         }
         throw new IOException("unsupported forward endpoint '" + spec + "'");
     }

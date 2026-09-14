@@ -91,6 +91,41 @@ final class DeviceServices {
             HostServices.writeOkay(out);
             throw new NoQueryTailException();
         }
+        if (service.equals("root:") || service.equals("unroot:")) {
+            // The bridge never runs adbd as root, matching a user-build device.
+            // adb root() checks the reply for "restarting"; any other text makes
+            // it return success after printing this line.
+            HostServices.writeOkay(out);
+            out.write("adbd cannot run as root in production builds\n"
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.flush();
+            throw new NoQueryTailException();
+        }
+        if (service.startsWith("reboot:")) {
+            // Rebooting the Android host from an app is impossible; reply like
+            // adbd does (bare OKAY, then EOF) so clients don't hang. The client
+            // just dumps the stream and exits.
+            d(service, "reboot requested (ignored)", service);
+            HostServices.writeOkay(out);
+            throw new NoQueryTailException();
+        }
+        if (service.startsWith("remount:") || service.startsWith("disable-verity:")
+            || service.startsWith("enable-verity:")) {
+            // Without root these always fail; reply the activation OKAY plus
+            // the plain-text status the client prints.
+            HostServices.writeOkay(out);
+            out.write("Not running as root\n".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.flush();
+            throw new NoQueryTailException();
+        }
+        if (service.startsWith("tcpip:")) {
+            HostServices.writeOkay(out);
+            out.write(("restarting in TCP mode (unsupported: network transports "
+                + "are not available in this bridge)\n")
+                .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            out.flush();
+            throw new NoQueryTailException();
+        }
         if (service.startsWith("tcp:") || service.startsWith("local:")
             || service.startsWith("localabstract:")) {
             return handleTransportConnect(in, out, service);
@@ -365,14 +400,22 @@ final class DeviceServices {
         }
         if (spec.equals("killforward-all")) {
             ForwardRegistry.killForwardAll();
+            // The client (commandline.cpp forward/reverse block) reads status
+            // twice: adb_connect's embedded adb_status, then adb_status again
+            // — 1st OKAY is connect, 2nd OKAY is status.
+            HostServices.writeOkay(out);
             HostServices.writeOkay(out);
             throw new NoQueryTailException();
         }
         if (spec.startsWith("killforward")) {
             String local = spec.substring("killforward".length());
             if (local.startsWith(":")) local = local.substring(1);
-            ForwardRegistry.killForward(local);
-            HostServices.writeOkay(out);
+            HostServices.writeOkay(out); // 1st OKAY: connect
+            if (!ForwardRegistry.killForward(local)) {
+                HostServices.writeFail(out, "cannot remove listener: no listener " + local);
+                throw new NoQueryTailException();
+            }
+            HostServices.writeOkay(out); // 2nd OKAY: status
             throw new NoQueryTailException();
         }
         if (spec.startsWith("forward")) {
@@ -386,11 +429,20 @@ final class DeviceServices {
             }
             String remote = rest.substring(0, semi);
             String local = rest.substring(semi + 1);
-            if (!ForwardRegistry.addForward(null, remote, local)) {
+            int resolvedTcpPort = ForwardRegistry.addForward(null, remote, local);
+            if (resolvedTcpPort < 0) {
                 HostServices.writeFail(out, "cannot rebind existing adb server socket");
                 throw new NoQueryTailException();
             }
+            // 1st OKAY: activation (adb_connect's embedded adb_status); 2nd
+            // OKAY: status (commandline.cpp's own adb_status call); then the
+            // actually-bound port for tcp:0 reverse listeners, which the
+            // client prints.
             HostServices.writeOkay(out);
+            HostServices.writeOkay(out);
+            if (resolvedTcpPort > 0) {
+                HostServices.writeMessage(out, String.valueOf(resolvedTcpPort));
+            }
             throw new NoQueryTailException();
         }
     }

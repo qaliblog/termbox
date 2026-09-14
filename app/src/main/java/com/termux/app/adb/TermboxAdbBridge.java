@@ -170,9 +170,14 @@ public final class TermboxAdbBridge {
         private final File mLocalTmp;
 
         FileSyncPaths(Context context) {
-            File ext = Environment.getExternalStorageDirectory();
-            mStorage = ext != null ? ext : new File("/sdcard");
-            mLocalTmp = new File(context.getFilesDir(), "adb/data/local/tmp");
+            this(Environment.getExternalStorageDirectory(),
+                new File(context.getFilesDir(), "adb/data/local/tmp"));
+        }
+
+        /** Direct-roots constructor (also used by the standalone test harness). */
+        FileSyncPaths(File storage, File localTmp) {
+            mStorage = storage != null ? storage : new File("/sdcard");
+            mLocalTmp = localTmp;
             //noinspection ResultOfMethodCallIgnored
             mLocalTmp.mkdirs();
         }

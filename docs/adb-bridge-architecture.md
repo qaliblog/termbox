@@ -224,6 +224,18 @@ commands must fail with realistic error text/exit status, never silently.
 
 - `host:<prefix>:forward:<local>;<remote>`, `...:forward:norebind:...`,
   `killforward[:all]`, `list-forward` (payload: lines `<serial> <local> <remote>\n`).
+- Rebind matches AOSP `install_listener`: an existing listener for the same local
+  endpoint is **replaced**; `--no-rebind` is what refuses it (FAIL text
+  `cannot rebind existing socket`). A freed name is reported as
+  `listener '<name>' not found`.
+- `tcp:0` asks the kernel for a free port; the resolved port is returned to the client
+  *and* kept as the listener's canonical local name (`tcp:<port>`), so `list-forward`
+  and later `killforward`/rebind requests address it by the real port.
+- `forward` (host-side) and `reverse` (device-side) keep separate registries, as they
+  do on a real host/device pair; `list-forward` prints only its own direction, with
+  `(reverse)` in place of the serial for reverse entries.
+  Caveat: because both sides share one loopback here, a `forward tcp:N` and a
+  `reverse tcp:N` for the *same* port number still collide at the socket level.
 - Local endpoints: `tcp:<port>`, `local:<path>` (filesystem sockets;
   `localabstract:`/`localreserved:` map to abstract-namespace sockets).
 - Remote endpoints on the device: `tcp:<port>`, `local:<path>` — the bridge implements
@@ -314,7 +326,7 @@ commands must fail with realistic error text/exit status, never silently.
 | `ForwardRegistry` | `forward`/`reverse`/`list-forward`/`killforward` bookkeeping + listener threads for `tcp:` and `local:` endpoints; `norebind`; connect-through to device-side endpoints or shell services (`tcp:<port>` remote = connect to that port in the *device/netns* = same loopback; `local:<path>` = UNIX socket connect, with `localabstract:` prefix mapping). |
 | `DeviceServices` | Service-string parser and dispatcher: `shell[,v2][,TERM=][,pty|raw]:`, `exec:`, `sync:`, `reverse:`, `tcp:`, `local:…`, `cmd package …` (install), `logcat` special, `shell:` fallback. |
 | `ShellRunner` | Subprocess engine. PTY mode: JNI-free PTY helper (`AdbPty` — own `/dev/ptmx` handling, mirrors `terminal-emulator` `termux.c` semantics); raw mode: `ProcessBuilder` pipes. Executes `/system/bin/sh -c <cmd>` in the **device (host) context**; interactive `shell:` runs the same login chain a real device would (`/system/bin/sh`), while `TERM` comes from the service string. v2 packetizer: stdin/stdout/stderr/exit/winchange framing incl. `0x80|sig` exit semantics. |
-| `DeviceCommandHandlers` | Emulators for `getprop`, `pm list packages|path|…`, `pm install/uninstall` (legacy text path), `am` (start/broadcast/force-stop via `am` binary — real Android behavior), `dumpsys` passthrough to `/system/bin/dumpsys` (needs no privilege for many services; failures honest), `settings` passthrough (fails without WRITE_SECURE_SETTINGS exactly as a real device would), `run-as` (honest failure unless debuggable app owned), `cmd` passthrough. Handlers only intercept what needs Java-backed emulation (`pm list packages`, `getprop` extras); everything else runs the real binary via `sh -c` so behavior is genuine. |
+| `DeviceCommandHandlers` | Emulators for `getprop`, `pm list packages|path|…`, `pm install/uninstall` (legacy text path), `am` (start/broadcast/force-stop via `am` binary — real Android behavior), `dumpsys` passthrough to `/system/bin/dumpsys` (needs no privilege for many services; failures honest), `settings` passthrough (fails without WRITE_SECURE_SETTINGS exactly as a real device would), `run-as` (honest failure unless debuggable app owned), `cmd` passthrough. Handlers only intercept what needs Java-backed emulation (`pm list packages`, and the small `getprop` key set that an app uid cannot read — `ro.secure`, `ro.debuggable`, `service.adb.root`, `ro.serialno`); `getprop <key>` defers to the real `/system/bin/getprop` for every other key and the list form merges the real property service (≈2000 entries) under the virtualized overlay. Interception applies only to bare invocations: anything the shell must compose (`getprop | grep`, `pm list packages > f`) falls through to the real `sh -c`, so pipes and redirection behave genuinely. Everything else runs the real binary so behavior is genuine. |
 | `PackageManagerService` | `cmd package install-create/-write/-commit/-abandon` session emulation backed by `android.content.pm.PackageInstaller` (API 21+): sessions, streaming APK bytes, `Success [<id>]` line protocol, honest `Error:`/`Exception:` lines for user builds (e.g. `INSTALL_FAILED_USER_RESTRICTED` passthrough), `uninstall` via `PackageInstaller.uninstall`. |
 | `FileSyncService` | sync protocol v1 (`STAT`/`LSTAT`, `LIST`, `SEND`, `RECV`, `QUIT`) + v2 stat/ls (`STA2`/`LST2`/`DNT2`), `FAIL` failure frames, 64 KiB chunk cap, mode/mtime preservation, path resolution bound to the app's storage access (same as `adb push` to `/sdcard` on a real device), `/data/local/tmp` mapped to the app's own scratch dir (readable/writable by shell UID on real devices). |
 | `LogcatService` | `logcat` shell command interception: streams real logd output (`Runtime.exec("logcat ...")` with `READ_LOGS`); `-d`, `-c`, `-s`, `-b` flag passthrough; honest failure without permission. |

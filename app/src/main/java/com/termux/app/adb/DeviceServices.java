@@ -395,11 +395,11 @@ final class DeviceServices {
     private static void handleReverse(OutputStream out, String spec) throws IOException {
         if (spec.startsWith("list-forward")) {
             HostServices.writeOkay(out);
-            HostServices.writeMessage(out, ForwardRegistry.listForward(null));
+            HostServices.writeMessage(out, ForwardRegistry.listForward(true));
             throw new NoQueryTailException();
         }
         if (spec.equals("killforward-all")) {
-            ForwardRegistry.killForwardAll();
+            ForwardRegistry.killForwardAll(true);
             // The client (commandline.cpp forward/reverse block) reads status
             // twice: adb_connect's embedded adb_status, then adb_status again
             // — 1st OKAY is connect, 2nd OKAY is status.
@@ -411,8 +411,8 @@ final class DeviceServices {
             String local = spec.substring("killforward".length());
             if (local.startsWith(":")) local = local.substring(1);
             HostServices.writeOkay(out); // 1st OKAY: connect
-            if (!ForwardRegistry.killForward(local)) {
-                HostServices.writeFail(out, "cannot remove listener: no listener " + local);
+            if (!ForwardRegistry.killForward(true, local)) {
+                HostServices.writeFail(out, "listener '" + local + "' not found");
                 throw new NoQueryTailException();
             }
             HostServices.writeOkay(out); // 2nd OKAY: status
@@ -421,17 +421,33 @@ final class DeviceServices {
         if (spec.startsWith("forward")) {
             String rest = spec.substring("forward".length());
             if (rest.startsWith(":")) rest = rest.substring(1);
-            if (rest.startsWith("norebind:")) rest = rest.substring("norebind:".length());
+            boolean norebind = false;
+            if (rest.startsWith("norebind:")) {
+                norebind = true;
+                rest = rest.substring("norebind:".length());
+            }
             int semi = rest.indexOf(';');
             if (semi < 0) {
-                HostServices.writeFail(out, "invalid reverse spec");
+                HostServices.writeFail(out, "bad reverse: " + rest);
                 throw new NoQueryTailException();
             }
-            String remote = rest.substring(0, semi);
-            String local = rest.substring(semi + 1);
-            int resolvedTcpPort = ForwardRegistry.addForward(null, remote, local);
+            // The device listens on the endpoint before the ';' and relays to
+            // the host endpoint after it (AOSP install_listener(pieces[0],
+            // pieces[1]) on the device side).
+            String deviceEndpoint = rest.substring(0, semi);
+            String hostEndpoint = rest.substring(semi + 1);
+            StringBuilder err = new StringBuilder();
+            int resolvedTcpPort = ForwardRegistry.addForward(true, deviceEndpoint, hostEndpoint,
+                norebind, err);
             if (resolvedTcpPort < 0) {
-                HostServices.writeFail(out, "cannot rebind existing adb server socket");
+                // Device-side model: adbd's service dispatch sends the
+                // activation OKAY before the handler runs, so a failure is
+                // OKAY followed by the FAIL status.
+                HostServices.writeOkay(out);
+                HostServices.writeFail(out, resolvedTcpPort == ForwardRegistry.ERR_CANNOT_REBIND
+                    ? "cannot rebind existing socket"
+                    : "cannot bind listener: "
+                        + (err.length() == 0 ? "unknown error" : err));
                 throw new NoQueryTailException();
             }
             // 1st OKAY: activation (adb_connect's embedded adb_status); 2nd

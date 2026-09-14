@@ -441,12 +441,12 @@ final class HostServices {
                 handleWaitForDevice(out, rest);
                 return true;
             case "list-forward":
-                writeOkayPayload(out, mForwards.listForward(serial));
+                writeOkayPayload(out, mForwards.listForward(false));
                 return true;
             case "killforward-all":
                 // AOSP handle_forward_request: "1st OKAY is connect, 2nd OKAY
                 // is status" for the host-side forward registry.
-                mForwards.killForwardAll();
+                mForwards.killForwardAll(false);
                 writeOkay(out);
                 writeOkay(out);
                 return true;
@@ -456,10 +456,11 @@ final class HostServices {
         if (rest.startsWith("killforward:")) {
             String local = rest.substring("killforward:".length());
             if (local.startsWith("norebind:")) local = local.substring("norebind:".length());
-            // 1st OKAY is connect, 2nd OKAY is status; FAIL on an unknown
-            // listener, matching remove_listener's INSTALL_STATUS_OK_NOT_FOUND.
-            if (!mForwards.killForward(local)) {
-                writeFail(out, "cannot remove listener: no listener " + local);
+            // AOSP handle_forward_request on the host sends the two OKAYs only
+            // on success; a missing listener is a single FAIL whose text is
+            // "listener '<name>' not found" (INSTALL_STATUS_LISTENER_NOT_FOUND).
+            if (!mForwards.killForward(false, local)) {
+                writeFail(out, "listener '" + local + "' not found");
                 return true;
             }
             writeOkay(out);
@@ -468,7 +469,11 @@ final class HostServices {
         }
         if (rest.startsWith("forward:")) {
             String spec = rest.substring("forward:".length());
-            if (spec.startsWith("norebind:")) spec = spec.substring("norebind:".length());
+            boolean norebind = false;
+            if (spec.startsWith("norebind:")) {
+                norebind = true;
+                spec = spec.substring("norebind:".length());
+            }
             int semi = spec.indexOf(';');
             if (semi < 0 || spec.indexOf(';', semi + 1) >= 0
                 || spec.substring(0, semi).isEmpty() || spec.substring(semi + 1).isEmpty()
@@ -478,9 +483,13 @@ final class HostServices {
             }
             String local = spec.substring(0, semi);
             String remote = spec.substring(semi + 1);
-            int resolvedTcpPort = mForwards.addForward(serial, local, remote);
+            StringBuilder err = new StringBuilder();
+            int resolvedTcpPort = mForwards.addForward(false, local, remote, norebind, err);
             if (resolvedTcpPort < 0) {
-                writeFail(out, "cannot bind listener: address already in use");
+                writeFail(out, resolvedTcpPort == ForwardRegistry.ERR_CANNOT_REBIND
+                    ? "cannot rebind existing socket"
+                    : "cannot bind listener: "
+                        + (err.length() == 0 ? "unknown error" : err));
                 return true;
             }
             // AOSP handle_forward_request (host side): 1st OKAY is connect,

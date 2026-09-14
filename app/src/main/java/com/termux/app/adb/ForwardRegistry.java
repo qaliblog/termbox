@@ -38,6 +38,12 @@ final class ForwardRegistry {
     private static final Object sLock = new Object();
     private static final List<Forward> sForwards = new ArrayList<>();
 
+    /** The listener could not be bound (a real bind error; see the error text). */
+    static final int ERR_CANNOT_BIND = -1;
+
+    /** A listener for the same local endpoint exists and `norebind` was set. */
+    static final int ERR_CANNOT_REBIND = -2;
+
     ForwardRegistry() {
     }
 
@@ -46,27 +52,47 @@ final class ForwardRegistry {
     /**
      * Register a listener for local;remote.
      *
-     * Returns the resolved TCP port for a "tcp:0" local endpoint (the AOSP
-     * handle_forward_request contract: the port actually bound), 0 for every
-     * other endpoint type (no port string is sent in the reply), or -1 if the
-     * listener could not be installed (rebinding refused / bind failure).
+     * Mirrors AOSP install_listener: the forward and reverse directions have
+     * separate namespaces (on a real device the forward listeners live on the
+     * host and the reverse listeners on the device), an existing listener for
+     * the same local endpoint is *replaced* unless `norebind` is set, and a
+     * `tcp:0` request is stored under the port it actually bound so that
+     * list-forward and later killforward/rebind requests address it by name.
+     *
+     * @param reverse   true for a device-side (`reverse:`) listener.
+     * @param local     the endpoint this side listens on.
+     * @param remote    the endpoint connections are relayed to.
+     * @param norebind  refuse to replace an existing listener.
+     * @param errorOut  receives the human-readable failure text when one occurs.
+     * @return the resolved TCP port (0 for non-tcp endpoints, or when the caller
+     *         requested a specific port), or ERR_CANNOT_BIND / ERR_CANNOT_REBIND.
      */
-    static int addForward(String serial, String local, String remote) {
+    static int addForward(boolean reverse, String local, String remote, boolean norebind,
+                          StringBuilder errorOut) {
         synchronized (sLock) {
-            // Refuse rebinding an existing local endpoint (norebind semantics
-            // are the default in modern adb).
-            for (Forward f : sForwards) {
-                if (f.localSpec.equals(local)) {
-                    return -1;
+            for (int i = 0; i < sForwards.size(); i++) {
+                Forward f = sForwards.get(i);
+                if (f.reverse != reverse || !f.localSpec.equals(local)) continue;
+                if (norebind) {
+                    if (errorOut != null) errorOut.append("cannot rebind existing socket");
+                    return ERR_CANNOT_REBIND;
                 }
+                // AOSP install_listener: without --no-rebind the existing
+                // listener is replaced rather than refused.
+                f.stop();
+                sForwards.remove(i);
+                break;
             }
             Forward f;
             try {
-                f = new Forward(serial, local, remote);
+                f = new Forward(reverse, local, remote);
             } catch (IOException e) {
                 TermboxAdbBridge.logWarn(LOG_TAG,
                     "forward " + local + " failed: " + e.getMessage());
-                return -1;
+                if (errorOut != null) {
+                    errorOut.append(e.getMessage() == null ? "bind failed" : e.getMessage());
+                }
+                return ERR_CANNOT_BIND;
             }
             sForwards.add(f);
             f.start();
@@ -74,12 +100,15 @@ final class ForwardRegistry {
         }
     }
 
-    /** Remove the forward whose local endpoint matches. */
-    static boolean killForward(String localSpec) {
+    /**
+     * Remove the listener whose local endpoint matches, within one direction.
+     * AOSP remove_listener addresses listeners by their canonical local name.
+     */
+    static boolean killForward(boolean reverse, String localSpec) {
         synchronized (sLock) {
             for (int i = 0; i < sForwards.size(); i++) {
                 Forward f = sForwards.get(i);
-                if (f.localSpec.equals(localSpec)) {
+                if (f.reverse == reverse && f.localSpec.equals(localSpec)) {
                     f.stop();
                     sForwards.remove(i);
                     return true;
@@ -89,19 +118,30 @@ final class ForwardRegistry {
         }
     }
 
-    static void killForwardAll() {
+    /** remove_all_listeners for one direction (host forwards or device reverses). */
+    static void killForwardAll(boolean reverse) {
         synchronized (sLock) {
-            for (Forward f : sForwards) f.stop();
-            sForwards.clear();
+            for (int i = sForwards.size() - 1; i >= 0; i--) {
+                if (sForwards.get(i).reverse == reverse) {
+                    sForwards.get(i).stop();
+                    sForwards.remove(i);
+                }
+            }
         }
     }
 
-    /** list-forward payload: "<serial> <local> <remote>\n" lines. */
-    static String listForward(String serial) {
+    /**
+     * list-forward payload, one direction at a time.
+     *
+     * AOSP format_listeners: "<serial> <local> <remote>\n", with "(reverse)"
+     * standing in for the serial of device-side (reverse) listeners.
+     */
+    static String listForward(boolean reverse) {
         StringBuilder sb = new StringBuilder();
         synchronized (sLock) {
             for (Forward f : sForwards) {
-                sb.append(serial != null && !serial.isEmpty() ? serial : HostServices.SERIAL)
+                if (f.reverse != reverse) continue;
+                sb.append(reverse ? "(reverse)" : HostServices.SERIAL)
                     .append(' ')
                     .append(f.localSpec)
                     .append(' ')
@@ -114,13 +154,18 @@ final class ForwardRegistry {
 
     /** Close every listener (server shutdown). */
     static void killAllListeners() {
-        killForwardAll();
+        synchronized (sLock) {
+            for (Forward f : sForwards) f.stop();
+            sForwards.clear();
+        }
     }
 
     // ---------- one forward ----------
 
     private static final class Forward {
-        final String serial;
+        /** true = device-side reverse listener, false = host-side forward listener. */
+        final boolean reverse;
+        /** Canonical local name: a bound tcp:0 listener is stored as tcp:<port>. */
         final String localSpec;
         final String remoteSpec;
         /** Port actually bound for a tcp:0 listener; 0 otherwise. */
@@ -129,13 +174,15 @@ final class ForwardRegistry {
         private Thread mThread;
         private volatile boolean mRunning;
 
-        Forward(String serial, String localSpec, String remoteSpec) throws IOException {
-            this.serial = serial;
-            this.localSpec = localSpec;
+        Forward(boolean reverse, String localSpec, String remoteSpec) throws IOException {
+            this.reverse = reverse;
             this.remoteSpec = remoteSpec;
             ListenerAndPort lp = openListener(localSpec);
             this.mListener = lp.listener;
             this.resolvedTcpPort = lp.port;
+            // AOSP install_listener renames a tcp:0 request to the port it
+            // actually bound; keep that canonical name for listing/matching.
+            this.localSpec = lp.port != 0 ? "tcp:" + lp.port : localSpec;
         }
 
         void start() {

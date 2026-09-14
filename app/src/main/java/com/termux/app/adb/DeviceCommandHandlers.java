@@ -1,7 +1,9 @@
 package com.termux.app.adb;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import android.os.Build;
 
 /**
@@ -38,6 +40,13 @@ class DeviceCommandHandlers {
      */
     static Result handle(String command) {
         String trimmed = command.trim();
+        // Only bare invocations are emulated. Anything the shell must compose
+        // (pipes, redirection, substitution, sequencing) runs for real via
+        // sh -c, otherwise `getprop | grep abi` would silently lose its pipe
+        // and `pm list packages > /sdcard/x` its redirection.
+        if (hasShellMeta(trimmed)) {
+            return null;
+        }
         if (trimmed.equals("getprop") || trimmed.startsWith("getprop ")) {
             return handleGetprop(trimmed);
         }
@@ -45,6 +54,20 @@ class DeviceCommandHandlers {
             return handlePmListPackages(trimmed);
         }
         return null;
+    }
+
+    /** Whether the shell is being asked to compose this command. */
+    private static boolean hasShellMeta(String command) {
+        for (int i = 0; i < command.length(); i++) {
+            switch (command.charAt(i)) {
+                case '|': case '&': case ';': case '<': case '>':
+                case '`': case '$': case '(': case ')':
+                    return true;
+                default:
+                    break;
+            }
+        }
+        return false;
     }
 
     // ---------- getprop ----------
@@ -58,21 +81,47 @@ class DeviceCommandHandlers {
      */
     private static Result handleGetprop(String command) {
         String rest = command.substring("getprop".length()).trim();
-        StringBuilder out = new StringBuilder();
         List<String[]> props = readProperties();
 
         if (rest.isEmpty()) {
-            for (String[] kv : props) {
-                out.append("[").append(kv[0]).append("]: [").append(kv[1]).append("]\n");
+            // List form. The virtualized set is deliberately small (and some
+            // of it — ro.secure, ro.serialno, service.adb.root — is unreadable
+            // from an app uid), but the real property service knows ~2000
+            // entries that agents legitimately need. Prefer the real list and
+            // overlay the virtualized values on top, so nothing is hidden and
+            // the bridge's coherent device identity still wins.
+            Result real = runRealGetprop(null);
+            if (real == null) {
+                StringBuilder out = new StringBuilder();
+                for (String[] kv : props) {
+                    out.append("[").append(kv[0]).append("]: [").append(kv[1]).append("]\n");
+                }
+                return new Result(out.toString(), "", 0);
             }
-            return new Result(out.toString(), "", 0);
+            return new Result(mergeProps(real.mStdout, props), real.mStderr, real.mExit);
         }
 
         String[] tokens = rest.split("\\s+");
         String key = stripQuotes(tokens[0]);
         String value = propValue(props, key);
 
-        // `getprop key default` — print the default when unset, like getprop.
+        // Keys the bridge virtualizes are answered from its own coherent set;
+        // everything else is a genuine device property (ro.product.cpu.abi,
+        // ro.product.board, ro.build.version.*, ...) that only the real
+        // property service can supply. Deferring here keeps this handler from
+        // shadowing a fully working /system/bin/getprop.
+        if (value != null) {
+            // Real getprop terminates the value with a newline.
+            return new Result(value + "\n", "", 0);
+        }
+
+        // `getprop key default` — getprop itself prints the default when the
+        // key is unset, so pass the whole argument list through unchanged.
+        Result real = runRealGetprop(tokens);
+        if (real != null) {
+            return real;
+        }
+        // No real binary available (test harness): unset prints nothing, exit 0.
         String def = null;
         if (tokens.length > 1) {
             StringBuilder d = new StringBuilder();
@@ -82,13 +131,59 @@ class DeviceCommandHandlers {
             }
             def = d.toString();
         }
-        if (value != null) {
-            out.append(value);
-        } else if (def != null && !def.isEmpty()) {
-            out.append(def);
+        return new Result(def == null || def.isEmpty() ? "" : def + "\n", "", 0);
+    }
+
+    /**
+     * Run the device's real getprop. Args are passed as separate argv entries
+     * (no shell involved), so keys and default values need no quoting. Returns
+     * null when the binary is unavailable or cannot be started.
+     */
+    private static Result runRealGetprop(String[] args) {
+        try {
+            List<String> argv = new ArrayList<>();
+            argv.add("/system/bin/getprop");
+            if (args != null) {
+                for (String a : args) argv.add(stripQuotes(a));
+            }
+            ProcessBuilder pb = new ProcessBuilder(argv);
+            pb.redirectErrorStream(false);
+            Process p = pb.start();
+            String stdout = drain(p.getInputStream());
+            String stderr = drain(p.getErrorStream());
+            int exit = p.waitFor();
+            return new Result(stdout, stderr, exit);
+        } catch (Exception e) {
+            return null;
         }
-        // Unset with no default prints nothing and exits 0, like getprop.
-        return new Result(out.toString(), "", 0);
+    }
+
+    private static String drain(java.io.InputStream in) throws java.io.IOException {
+        java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+        byte[] chunk = new byte[8192];
+        int n;
+        while ((n = in.read(chunk)) > 0) buf.write(chunk, 0, n);
+        return new String(buf.toByteArray(), java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /** Real `[key]: [value]` list with the virtualized entries overlaid. */
+    private static String mergeProps(String realList, List<String[]> virtualized) {
+        Map<String, String> merged = new LinkedHashMap<>();
+        for (String line : realList.split("\n")) {
+            String t = line.trim();
+            if (!t.startsWith("[")) continue;
+            int close = t.indexOf("]: [");
+            if (close <= 1 || !t.endsWith("]")) continue;
+            merged.put(t.substring(1, close), t.substring(close + 4, t.length() - 1));
+        }
+        for (String[] kv : virtualized) {
+            merged.put(kv[0], kv[1]);
+        }
+        StringBuilder out = new StringBuilder();
+        for (Map.Entry<String, String> e : merged.entrySet()) {
+            out.append("[").append(e.getKey()).append("]: [").append(e.getValue()).append("]\n");
+        }
+        return out.toString();
     }
 
     private static String propValue(List<String[]> props, String key) {

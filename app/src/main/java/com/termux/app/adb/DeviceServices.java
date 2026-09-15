@@ -229,7 +229,7 @@ final class DeviceServices {
             stdinThread.setDaemon(true);
             stdinThread.start();
             d(service, "pty shell started pid=" + fengine.mPid, service);
-            engine.run(out);
+            engine.run(out, v2);
             engine.kill(); // if output EOF'd early, ensure the child is gone
             throw new NoQueryTailException();
         }
@@ -251,7 +251,7 @@ final class DeviceServices {
             "adb-shell-stdin");
         stdinThread.setDaemon(true);
         stdinThread.start();
-        engine.run(out);
+        engine.run(out, v2);
         engine.kill();
     }
 
@@ -260,25 +260,31 @@ final class DeviceServices {
         try {
             ShellRunner.PtyEngine engine = runner.startPty(command, term, 0, 0);
             if (engine == null) {
-                sendShellError(out, "PTY unavailable and pipe failed");
+                sendShellError(out, "PTY unavailable and pipe failed", v2);
                 return;
             }
             Thread stdinThread = new Thread(() -> pumpShellStdin(in, engine, v2, true),
                 "adb-shell-stdin");
             stdinThread.setDaemon(true);
             stdinThread.start();
-            engine.run(out);
+            engine.run(out, v2);
             engine.kill();
         } catch (IOException e) {
-            sendShellError(out, "PTY fallback failed: " + e);
+            sendShellError(out, "PTY fallback failed: " + e, v2);
         }
     }
 
-    private static void sendShellError(OutputStream out, String msg) {
+    private static void sendShellError(OutputStream out, String msg, boolean v2) {
         try {
             byte[] data = msg.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-            ShellProtocol.writePacket(out, ShellProtocol.ID_STDERR, data, 0, data.length);
-            ShellProtocol.writeExit(out, 1);
+            if (v2) {
+                ShellProtocol.writePacket(out, ShellProtocol.ID_STDERR, data, 0, data.length);
+                ShellProtocol.writeExit(out, 1);
+            } else {
+                // Legacy shell is a raw stream: plain text, no exit status.
+                out.write(data);
+                out.flush();
+            }
         } catch (IOException ignored) {
         }
     }
@@ -379,6 +385,26 @@ final class DeviceServices {
             throw new NoQueryTailException();
         }
         d(command, "executing via sh -c", command);
+        // adb exec-in writes the payload to the socket after OKAY; without a
+        // stdin pump the data is never read and the command sees an empty
+        // input. Pump raw bytes, then half-close the child's stdin so input-
+        // driven commands (cat, tar, ...) terminate like on a real device.
+        final ShellRunner.PipeEngine fengine = engine;
+        final InputStream fin = in;
+        Thread stdinThread = new Thread(() -> {
+            byte[] buf = new byte[8 * 1024];
+            try {
+                int n;
+                while ((n = fin.read(buf)) > 0) {
+                    if (!fengine.writeStdin(buf, n)) break;
+                }
+            } catch (IOException ignored) {
+                // client went away
+            }
+            fengine.closeStdin();
+        }, "adb-exec-stdin");
+        stdinThread.setDaemon(true);
+        stdinThread.start();
         engine.runRaw(out);
         engine.kill();
         throw new NoQueryTailException();

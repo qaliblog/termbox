@@ -131,11 +131,38 @@ final class ShellRunner {
         }
 
         /**
-         * Pump the child's stdout/stderr into v2 packets, then send exit.
-         * Runs until the child exits and both streams are drained.
+         * Pump the child's stdout/stderr, then send exit (v2 only). Legacy
+         * clients get a raw merged stream with no exit status, matching
+         * adbd's legacy shell (which is a PTY, i.e. output is merged).
          */
-        void run(OutputStream out) throws IOException {
+        void run(OutputStream out, boolean v2) throws IOException {
             InputStream stdout = mProcess.getInputStream();
+            if (!v2) {
+                byte[] buf = new byte[32 * 1024];
+                int n;
+                try {
+                    while ((n = stdout.read(buf)) > 0) {
+                        out.write(buf, 0, n);
+                        out.flush();
+                    }
+                    if (!mMerged) {
+                        InputStream stderr = mProcess.getErrorStream();
+                        while ((n = stderr.read(buf)) > 0) {
+                            out.write(buf, 0, n);
+                            out.flush();
+                        }
+                    }
+                } catch (IOException ignored) {
+                    // client closed
+                }
+                try {
+                    mProcess.waitFor();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    mProcess.destroy();
+                }
+                return;
+            }
             byte[] buf = new byte[ShellProtocol.MAX_PAYLOAD];
 
             if (!mMerged) {
@@ -229,12 +256,26 @@ final class ShellRunner {
         }
 
         /**
-         * Pump PTY output into stdout packets until EOF, then reap the child
-         * and emit the exit packet (0x80|sig on signal death, like shell v2).
+         * Pump PTY output until EOF, then reap the child. v2 clients get the
+         * exit packet; legacy clients get a bare raw stream (no status).
          */
-        int run(OutputStream out) throws IOException {
+        int run(OutputStream out, boolean v2) throws IOException {
             byte[] buf = new byte[ShellProtocol.MAX_PAYLOAD];
             int n;
+            if (!v2) {
+                byte[] raw = new byte[32 * 1024];
+                try {
+                    while ((n = AdbPty.readFd(mMasterFd, raw)) > 0) {
+                        out.write(raw, 0, n);
+                        out.flush();
+                    }
+                } catch (IOException ignored) {
+                    // client closed
+                }
+                AdbPty.closeFd(mMasterFd);
+                AdbPty.nativeWaitFor(mPid);
+                return 0;
+            }
             try {
                 while ((n = AdbPty.readFd(mMasterFd, buf)) > 0) {
                     ShellProtocol.writePacket(out, ShellProtocol.ID_STDOUT, buf, n);

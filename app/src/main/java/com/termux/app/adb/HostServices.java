@@ -282,7 +282,8 @@ final class HostServices {
             String inner = body.substring(idx + 1);
             d("host service", "host-transport-id tid=" + tid + " inner=" + inner);
             if (!knownTransportId(tid)) {
-                writeFail(out, "transport_id '" + tid + "' not found");
+                // AOSP acquire_one_transport: "no device with transport id '%llu'".
+                writeFail(out, "no device with transport id '" + tid + "'");
                 return true;
             }
             if (isDeviceService(inner)) {
@@ -377,14 +378,18 @@ final class HostServices {
         if (rest.startsWith("transport-id:")) {
             String wanted = rest.substring("transport-id:".length());
             d("host service", "transport-id switch: " + wanted);
-            if (knownTransportId(wanted)) {
-                writeOkay(out);
-                String next = readDeviceServiceString(in);
-                dispatchDeviceServiceOrFail(socket, in, out, next);
-                throw new DeviceServices.NoQueryTailException();
+            if (!isTransportIdSyntax(wanted)) {
+                writeFail(out, "invalid transport id");
+                return true;
             }
-            writeFail(out, "invalid transport id");
-            return true;
+            if (!knownTransportId(wanted)) {
+                writeFail(out, "no device with transport id '" + wanted + "'");
+                return true;
+            }
+            writeOkay(out);
+            String next = readDeviceServiceString(in);
+            dispatchDeviceServiceOrFail(socket, in, out, next);
+            throw new DeviceServices.NoQueryTailException();
         }
         switch (rest) {
             case "version":
@@ -548,15 +553,29 @@ final class HostServices {
             || service.startsWith("localabstract:");
     }
 
-    /** Whether the given transport-id string is one this bridge advertises. */
+    /**
+     * Whether the given transport-id string names a transport this bridge has.
+     *
+     * The bridge exposes exactly one transport (see devicesList() and
+     * get-transport-id), so any other id is as unknown as a bogus serial — adb
+     * must not silently retarget `adb -t <id>` at it.
+     */
     private static boolean knownTransportId(String id) {
-        if (id == null || id.isEmpty()) return false;
+        if (!isTransportIdSyntax(id)) return false;
         try {
-            long v = Long.parseLong(id);
-            return v > 0 && v <= Long.MAX_VALUE;
+            return Long.parseLong(id) == 1;
         } catch (NumberFormatException e) {
             return false;
         }
+    }
+
+    /** Whether the string parses as a transport id at all (AOSP ParseUint). */
+    private static boolean isTransportIdSyntax(String id) {
+        if (id == null || id.isEmpty()) return false;
+        for (int i = 0; i < id.length(); i++) {
+            if (!Character.isDigit(id.charAt(i))) return false;
+        }
+        return true;
     }
 
     /** Long-lived host:track-devices stream. */

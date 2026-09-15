@@ -52,7 +52,16 @@ final class FileSyncService {
         return (a) | ((b) << 8) | ((c) << 16) | ((d) << 24);
     }
 
+    private static final String LOG_TAG = TermboxAdbBridge.LOG_TAG;
+
     private FileSyncService() {
+    }
+
+    /** Four-char wire id rendered as text ('STAT', 'LST2', ...) for logs. */
+    private static String idName(int id) {
+        return new String(new char[] {
+            (char) (id & 0xff), (char) ((id >> 8) & 0xff),
+            (char) ((id >> 16) & 0xff), (char) ((id >> 24) & 0xff)});
     }
 
     private static int myUid() {
@@ -84,6 +93,9 @@ final class FileSyncService {
             byte[] payload = new byte[len];
             if (len > 0) readFully(in, payload, 0, len);
             String path = new String(payload, StandardCharsets.UTF_8);
+
+            TermboxAdbBridge.logDebug(LOG_TAG, "sync request id=" + idName(id) + " path='" + path
+                + "' len=" + len);
 
             if (id == ID_QUIT) return;
             if (id == ID_STAT_V1 || id == ID_STAT_V2 || id == ID_LSTAT_V2) { handleStat(out, path.trim(), id); continue; }
@@ -176,19 +188,23 @@ final class FileSyncService {
 
     // ---------- list ----------
 
-    /** LIST: DENT entries then a raw DONE struct. */
+    /**
+     * LIST: DENT/DNT2 entries then the ID_DONE terminator, which AOSP writes as
+     * a whole dent struct of the matching version (20 or 76 bytes).
+     */
     private static void handleList(OutputStream out, String path, int reqId) throws IOException {
         boolean v2 = (reqId == ID_LIST_V2);
         TermboxAdbBridge.FileSyncPaths paths = TermboxAdbBridge.syncPaths();
         File dir = paths != null ? paths.resolve(path) : null;
-        if (dir == null) {
-            writeFail(out, "Permission denied");
-            return;
-        }
-        File[] entries = dir.listFiles();
+        File[] entries = dir == null ? null : dir.listFiles();
         if (entries == null) {
-            writeFail(out, !dir.exists() ? "No such file or directory" : "Not a directory");
-            return;
+            // AOSP do_list falls through to the DONE terminator when opendir or
+            // a per-entry lstat fails; it never sends a FAIL frame here. That
+            // matters because the client reads sizeof(sync_dent_vN) bytes and
+            // only then looks at the id, so a short reply would block it.
+            TermboxAdbBridge.logWarn(LOG_TAG,
+                "sync ls: cannot list '" + path + "' (treating as empty)");
+            entries = new File[0];
         }
         java.util.Arrays.sort(entries);
         for (File entry : entries) {
@@ -230,9 +246,11 @@ final class FileSyncService {
             }
             out.write(frame);
         }
-        byte[] done = new byte[8];
+        // AOSP do_list terminates the listing with an ID_DONE frame the full
+        // size of the version's dent struct (sizeof(sync_dent_v1) == 20,
+        // sizeof(sync_dent_v2) == 76), all remaining fields zero.
+        byte[] done = new byte[v2 ? 76 : 20];
         putLe32(done, 0, ID_DONE);
-        putLe32(done, 4, 0);
         out.write(done);
         out.flush();
     }

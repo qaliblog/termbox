@@ -182,7 +182,12 @@ daemon/services.cpp, client/commandline.cpp, client/adb_install.cpp, adb.h).
   - `STAT` response: 16-byte `sync_stat_v1 { id, mode, size, mtime }`; "does not exist"
     = all-zero struct.
   - `LIST` response: sequence of `DENT { id, mode, size, mtime, namelen, name }`,
-    terminated by `DONE {0}`.
+    terminated by `DONE`, which AOSP writes as a **whole dent struct** of the version's
+    size (20 bytes v1, 76 bytes v2, remaining fields zero) — the client reads
+    `sizeof(sync_dent_vN)` bytes before it looks at the id, so a short `DONE` (e.g. the
+    bare 8-byte `sync_status` form) leaves it blocked forever. A listing that fails
+    (`opendir`, non-directory) also ends in `DONE` with no entries, never a `FAIL`
+    frame, for the same reason.
   - `SEND`: path `,mode` (decimal octal after last comma, e.g. `/data/x,0700`) in the
     request; then `DATA <len> <bytes>` chunks (≤ 64 KiB), terminated by
     `DONE <mtime>` → response `OKAY` (sync `OKAY`, 4-byte id + zero length) or
@@ -225,15 +230,25 @@ commands must fail with realistic error text/exit status, never silently.
 - `host:<prefix>:forward:<local>;<remote>`, `...:forward:norebind:...`,
   `killforward[:all]`, `list-forward` (payload: lines `<serial> <local> <remote>\n`).
 - Rebind matches AOSP `install_listener`: an existing listener for the same local
-  endpoint is **replaced**; `--no-rebind` is what refuses it (FAIL text
-  `cannot rebind existing socket`). A freed name is reported as
-  `listener '<name>' not found`.
+  endpoint is **repurposed in place** — the bound socket is kept and only its
+  `connect_to` target is swapped (closing and re-binding would race the accept thread
+  and fail with `EADDRINUSE`). `--no-rebind` is what refuses it (FAIL text
+  `cannot rebind existing socket`); a repurpose resolves no port, so nothing is echoed
+  back, exactly as upstream leaves `resolved_tcp_port` 0. A freed name is reported as
+  `listener '<name>' not found`, an unlistable spec as
+  `cannot bind listener: unknown socket specification:<spec>`, and a real bind failure
+  as `cannot bind listener: <strerror>` (e.g. `Address already in use`; Android's
+  `BindException` text is normalised to the bare strerror form).
 - `tcp:0` asks the kernel for a free port; the resolved port is returned to the client
   *and* kept as the listener's canonical local name (`tcp:<port>`), so `list-forward`
   and later `killforward`/rebind requests address it by the real port.
 - `forward` (host-side) and `reverse` (device-side) keep separate registries, as they
   do on a real host/device pair; `list-forward` prints only its own direction, with
   `(reverse)` in place of the serial for reverse entries.
+- Transport selection accepts only the id the bridge advertises (1, also reported by
+  `devices -l` and `get-transport-id`): `adb -t 99 shell …` fails with AOSP's
+  `no device with transport id '99'` instead of silently retargeting the sole
+  transport, and a non-numeric id fails with `invalid transport id`.
   Caveat: because both sides share one loopback here, a `forward tcp:N` and a
   `reverse tcp:N` for the *same* port number still collide at the socket level.
 - Local endpoints: `tcp:<port>`, `local:<path>` (filesystem sockets;

@@ -77,11 +77,14 @@ final class ForwardRegistry {
                     if (errorOut != null) errorOut.append("cannot rebind existing socket");
                     return ERR_CANNOT_REBIND;
                 }
-                // AOSP install_listener: without --no-rebind the existing
-                // listener is replaced rather than refused.
-                f.stop();
-                sForwards.remove(i);
-                break;
+                // AOSP install_listener repurposes the existing listener: the
+                // bound socket is kept and only its connect_to target changes.
+                // Closing and re-binding instead would race with the accept
+                // thread's own close and fail with EADDRINUSE. A repurpose
+                // resolves no port either (AOSP leaves resolved_tcp_port 0), so
+                // no port string is sent back for it.
+                f.repoint(remote);
+                return 0;
             }
             Forward f;
             try {
@@ -145,7 +148,7 @@ final class ForwardRegistry {
                     .append(' ')
                     .append(f.localSpec)
                     .append(' ')
-                    .append(f.remoteSpec)
+                    .append(f.mRemoteSpec)
                     .append('\n');
             }
         }
@@ -167,7 +170,8 @@ final class ForwardRegistry {
         final boolean reverse;
         /** Canonical local name: a bound tcp:0 listener is stored as tcp:<port>. */
         final String localSpec;
-        final String remoteSpec;
+        /** Relay target; replaced in place by a rebind (AOSP install_listener). */
+        private volatile String mRemoteSpec;
         /** Port actually bound for a tcp:0 listener; 0 otherwise. */
         final int resolvedTcpPort;
         private final Listener mListener;
@@ -176,13 +180,18 @@ final class ForwardRegistry {
 
         Forward(boolean reverse, String localSpec, String remoteSpec) throws IOException {
             this.reverse = reverse;
-            this.remoteSpec = remoteSpec;
+            this.mRemoteSpec = remoteSpec;
             ListenerAndPort lp = openListener(localSpec);
             this.mListener = lp.listener;
             this.resolvedTcpPort = lp.port;
             // AOSP install_listener renames a tcp:0 request to the port it
             // actually bound; keep that canonical name for listing/matching.
             this.localSpec = lp.port != 0 ? "tcp:" + lp.port : localSpec;
+        }
+
+        /** Point this listener at a new remote endpoint, keeping its socket. */
+        void repoint(String remoteSpec) {
+            mRemoteSpec = remoteSpec;
         }
 
         void start() {
@@ -214,7 +223,7 @@ final class ForwardRegistry {
             Thread t = new Thread(() -> {
                 Connection remote = null;
                 try {
-                    remote = connectRemote(remoteSpec);
+                    remote = connectRemote(mRemoteSpec);
                 } catch (IOException e) {
                     try { client.close(); } catch (IOException ignored) {}
                     return;
@@ -311,7 +320,11 @@ final class ForwardRegistry {
             int port = parsePort(spec);
             ServerSocket ss = new ServerSocket();
             ss.setReuseAddress(true);
-            ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port));
+            try {
+                ss.bind(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port));
+            } catch (IOException e) {
+                throw new IOException(normalizeBindError(e.getMessage()));
+            }
             final int bound = ss.getLocalPort();
             return new ListenerAndPort(new Listener() {
                 @Override
@@ -356,7 +369,8 @@ final class ForwardRegistry {
                 }
             }, 0);
         }
-        throw new IOException("unsupported forward endpoint '" + spec + "'");
+        // AOSP socket_spec_listen appends the spec with no separator here.
+        throw new IOException("unknown socket specification:" + spec);
     }
 
     private static Connection connectRemote(String spec) throws IOException {
@@ -381,6 +395,25 @@ final class ForwardRegistry {
             throw new IOException("failed to connect to '" + spec + "'");
         }
         throw new IOException("unsupported remote endpoint '" + spec + "'");
+    }
+
+    /**
+     * Map Android's bind failure text onto AOSP's.
+     *
+     * network_loopback_server reports the bare strerror string, so a real host
+     * says "cannot bind listener: Address already in use"; Android's
+     * BindException wraps the same thing as
+     * "bind failed: EADDRINUSE (Address already in use)".
+     */
+    private static String normalizeBindError(String message) {
+        if (message == null) return "bind failed";
+        String prefix = "bind failed: ";
+        if (message.startsWith(prefix)) {
+            int open = message.indexOf('(');
+            int close = message.lastIndexOf(')');
+            if (open > 0 && close > open) return message.substring(open + 1, close);
+        }
+        return message;
     }
 
     private static int parsePort(String spec) throws IOException {

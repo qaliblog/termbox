@@ -6,17 +6,16 @@
  *
  *   host:version                     OKAY + hex4 ADB_SERVER_VERSION + tail
  *   host:features                    feature set the official client keys on
- *   host:devices[-l]                 device list (payload only; the client
- *                                    prints the "List of devices attached"
- *                                    header itself)
+ *   host:devices[-l]                 live device list (virtual + network)
  *   host:track-devices               long-lived streaming device list
  *   host-serial:<serial>:<service>   serial-scoped host queries
  *   host:transport[-any][:<serial>]  transport selection, then the next
  *                                    service string on the same socket
+ *   host-transport-id:<id>:<service> adb -t <id>
  *   host:forward[:norebind]:l;r      forward registry (OKAY / FAIL)
  *   host:list-forward / killforward[-all]
  *   host:kill                        server shutdown (with prompt restart)
- *   anything else                    device service dispatch (DeviceServices)
+ *   anything else                    device service dispatch (TransportSelection)
  *
  * Reply discipline (smart socket): every successful service activation sends
  * a bare "OKAY" first; query services then send a hex4 payload and the
@@ -24,6 +23,9 @@
  * services are raw streams after OKAY and must not get the tail.
  */
 package com.termux.app.adb;
+
+import com.termux.app.adb.remote.AdbTransportManager;
+import com.termux.app.adb.remote.RemoteDevice;
 
 import java.io.EOFException;
 import java.io.IOException;
@@ -34,7 +36,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** AOSP-compatible host services layer for the TermBox ADB bridge. */
-final class HostServices {
+public final class HostServices {
 
     static final String SERIAL = "emulator-5554";
 
@@ -128,50 +130,50 @@ final class HostServices {
      * including host services (e.g. "host:forward:..." for `adb forward`, since
      * commandline.cpp force-switches for forward/reverse), so host services
      * recurse back into handleService while device services are dispatched
-     * directly (they own the raw stream from here on).
+     * through the selected target (they own the raw stream from here on).
      */
-    private void finishTransportSwitch(Socket socket, InputStream in, OutputStream out)
-        throws IOException {
+    private void finishTransportSwitch(Socket socket, InputStream in, OutputStream out,
+                                       TransportSelection.Target target) throws IOException {
         writeOkay(out);
-        writeTransportId(out, 1);
+        writeTransportId(out, target.transportId());
         String next = readDeviceServiceString(in);
         d("host service", "transport switch next: " + next);
         if (next.startsWith("host:") || next.startsWith("host-serial:")
             || next.startsWith("host-transport-id:")) {
             handleService(socket, in, out, next);
         } else {
-            dispatchDeviceServiceOrFail(socket, in, out, next);
+            dispatchDeviceServiceOrFail(socket, in, out, next, target);
         }
         throw new DeviceServices.NoQueryTailException();
     }
 
     /**
-     * Dispatch a device service; if it is not a known service, answer FAIL
-     * (no tail — the raw-stream context after a transport switch) so the
-     * client reports "unknown service" instead of seeing a silent close.
+     * Dispatch a device service on the selected transport; if the transport
+     * cannot serve it, answer FAIL (no tail — the raw-stream context after a
+     * transport switch) so the client reports "unknown service" instead of
+     * seeing a silent close.
      */
     private void dispatchDeviceServiceOrFail(Socket socket, InputStream in, OutputStream out,
-                                             String service) throws IOException {
-        if (!mDeviceServices.handleDeviceService(socket, in, out, service)) {
+                                             String service, TransportSelection.Target target)
+        throws IOException {
+        if (target == null) {
+            writeFail(out, "device offline or not found");
+            throw new DeviceServices.NoQueryTailException();
+        }
+        if (!target.serve(socket, in, out, service)) {
             d("host service", "unknown device service: " + service);
             writeFail(out, "unknown service " + service);
         }
     }
 
     /**
-     * wait-for-<transport>-<state>: the bridge's single device is always
-     * present and online, so the wait condition is satisfied immediately.
-     *
-     * Reply shape (verified against AOSP): the client runs wait-for through
-     * adb_command() (commandline.cpp wait_for_device), which reads ONE adb_status
-     * after activation and then expects an orderly shutdown — i.e. exactly two
-     * bare "OKAY"s and nothing else (adb.cpp host-side forward handlers:
-     * "1st OKAY is connect, 2nd OKAY is status"). A payload here is misread as
-     * the status word ("protocol fault (status 30 30 30 30)" for "0000").
+     * wait-for-<transport>-<state>: satisfied when at least one device is
+     * online. The virtual device is always present; with a default selection
+     * the wait is immediate (AOSP waits for the selected transport's state).
      */
     private static boolean handleWaitForDevice(OutputStream out, String rest) throws IOException {
         if (!rest.startsWith("wait-for-")) return false;
-        d("host service", "wait-for satisfied immediately: " + rest);
+        d("host service", "wait-for satisfied: " + rest);
         writeOkay(out);
         writeOkay(out);
         return true;
@@ -187,13 +189,13 @@ final class HostServices {
     }
 
     /** Write the bare OKAY activation marker (no framing). */
-    static void writeOkay(OutputStream out) throws IOException {
+    public static void writeOkay(OutputStream out) throws IOException {
         out.write(OKAY);
         out.flush();
     }
 
     /** Write a FAIL activation marker with a hex4-framed reason. */
-    static void writeFail(OutputStream out, String reason) throws IOException {
+    public static void writeFail(OutputStream out, String reason) throws IOException {
         out.write(FAIL);
         writeMessage(out, reason);
     }
@@ -281,13 +283,14 @@ final class HostServices {
             String tid = body.substring(0, idx);
             String inner = body.substring(idx + 1);
             d("host service", "host-transport-id tid=" + tid + " inner=" + inner);
-            if (!knownTransportId(tid)) {
+            TransportSelection.Target target = TransportSelection.select(null, tid, false, false);
+            if (target == null) {
                 // AOSP acquire_one_transport: "no device with transport id '%llu'".
                 writeFail(out, "no device with transport id '" + tid + "'");
                 return true;
             }
             if (isDeviceService(inner)) {
-                dispatchDeviceServiceOrFail(socket, in, out, inner);
+                dispatchDeviceServiceOrFail(socket, in, out, inner, target);
                 throw new DeviceServices.NoQueryTailException();
             }
             return handleService(socket, in, out, "host:" + inner);
@@ -302,11 +305,12 @@ final class HostServices {
             rest = service.substring(idx + 1);
             if (isDeviceService(rest)) {
                 d("host service", "host-serial device service rest=" + rest + " serial=" + serial);
-                if (!DeviceServices.knownSerial(serial)) {
+                TransportSelection.Target target = TransportSelection.select(serial, null, false, false);
+                if (target == null) {
                     writeFail(out, "device '" + serial + "' not found");
                     return true;
                 }
-                dispatchDeviceServiceOrFail(socket, in, out, rest);
+                dispatchDeviceServiceOrFail(socket, in, out, rest, target);
                 throw new DeviceServices.NoQueryTailException();
             }
             // Otherwise, fall through to host service handling with the parsed serial.
@@ -318,7 +322,7 @@ final class HostServices {
             rest = service.substring("host:".length());
         } else {
             // Direct device service (client already selected the transport).
-            dispatchDeviceServiceOrFail(socket, in, out, service);
+            dispatchDeviceServiceOrFail(socket, in, out, service, TransportSelection.select(null, null, false, false));
             return true;
         }
 
@@ -337,19 +341,32 @@ final class HostServices {
             d("host service", "tport switch spec=" + spec);
             if (spec.startsWith("serial:")) {
                 String wanted = spec.substring("serial:".length());
-                if (!DeviceServices.knownSerial(wanted) && !SERIAL.equals(wanted)) {
+                TransportSelection.Target t = TransportSelection.select(wanted, null, false, false);
+                if (t == null) {
                     writeFail(out, "device '" + wanted + "' not found");
                     return true;
                 }
-                finishTransportSwitch(socket, in, out);
+                finishTransportSwitch(socket, in, out, t);
             }
-            if (spec.equals("usb") || spec.equals("local") || spec.equals("any")) {
-                finishTransportSwitch(socket, in, out);
+            if (spec.equals("usb")) {
+                finishTransportSwitch(socket, in, out, TransportSelection.select(null, null, true, false));
+            }
+            if (spec.equals("local")) {
+                finishTransportSwitch(socket, in, out, TransportSelection.select(null, null, false, true));
+            }
+            if (spec.equals("any")) {
+                TransportSelection.Target t = TransportSelection.select(null, null, false, false);
+                if (t == null) {
+                    writeFail(out, "more than one device/emulator");
+                    return true;
+                }
+                finishTransportSwitch(socket, in, out, t);
             }
             // tport:<serial> (selection by id is unimplemented upstream; the
             // client only ever sends any/usb/local/serial:).
-            if (DeviceServices.knownSerial(spec) || SERIAL.equals(spec)) {
-                finishTransportSwitch(socket, in, out);
+            TransportSelection.Target t = TransportSelection.select(spec, null, false, false);
+            if (t != null) {
+                finishTransportSwitch(socket, in, out, t);
             }
             writeFail(out, "unknown transport type '" + spec + "'");
             return true;
@@ -357,19 +374,23 @@ final class HostServices {
         if (rest.equals("transport-any") || rest.equals("transport-usb")
             || rest.equals("transport-local")) {
             d("host service", "legacy transport switch: " + rest);
+            boolean wantUsb = rest.equals("transport-usb");
+            boolean wantTcp = rest.equals("transport-local");
+            TransportSelection.Target t = TransportSelection.select(null, null, wantUsb, wantTcp);
             writeOkay(out);
             String next = readDeviceServiceString(in);
             d("host service", "legacy transport next: " + next);
-            dispatchDeviceServiceOrFail(socket, in, out, next);
+            dispatchDeviceServiceOrFail(socket, in, out, next, t);
             throw new DeviceServices.NoQueryTailException();
         }
         if (rest.startsWith("transport:")) {
             String wanted = rest.substring("transport:".length());
             d("host service", "legacy transport serial switch: " + wanted);
-            if (SERIAL.equals(wanted) || DeviceServices.knownSerial(wanted)) {
+            TransportSelection.Target t = TransportSelection.select(wanted, null, false, false);
+            if (t != null) {
                 writeOkay(out);
                 String next = readDeviceServiceString(in);
-                dispatchDeviceServiceOrFail(socket, in, out, next);
+                dispatchDeviceServiceOrFail(socket, in, out, next, t);
                 throw new DeviceServices.NoQueryTailException();
             }
             writeFail(out, "device '" + wanted + "' not found");
@@ -378,17 +399,14 @@ final class HostServices {
         if (rest.startsWith("transport-id:")) {
             String wanted = rest.substring("transport-id:".length());
             d("host service", "transport-id switch: " + wanted);
-            if (!isTransportIdSyntax(wanted)) {
-                writeFail(out, "invalid transport id");
-                return true;
-            }
-            if (!knownTransportId(wanted)) {
+            TransportSelection.Target t = TransportSelection.select(null, wanted, false, false);
+            if (t == null) {
                 writeFail(out, "no device with transport id '" + wanted + "'");
                 return true;
             }
             writeOkay(out);
             String next = readDeviceServiceString(in);
-            dispatchDeviceServiceOrFail(socket, in, out, next);
+            dispatchDeviceServiceOrFail(socket, in, out, next, t);
             throw new DeviceServices.NoQueryTailException();
         }
         switch (rest) {
@@ -419,18 +437,30 @@ final class HostServices {
             case "reconnect-offline":
                 writeOkayPayload(out, "done");
                 return true;
-            case "get-state":
-                writeOkayPayload(out, "device");
+            case "get-state": {
+                String state = DeviceServices.stateForSerial(serial);
+                writeOkayPayload(out, state);
                 return true;
+            }
             case "get-serialno":
-                writeOkayPayload(out, SERIAL);
+                writeOkayPayload(out, serial != null ? serial : DeviceServices.SERIAL);
                 return true;
             case "get-devpath":
-                writeOkayPayload(out, SERIAL);
+                writeOkayPayload(out, serial != null ? serial : DeviceServices.SERIAL);
                 return true;
-            case "get-transport-id":
-                writeOkayPayload(out, "1");
+            case "get-transport-id": {
+                long id = 1;
+                if (serial != null && !DeviceServices.SERIAL.equals(serial)) {
+                    RemoteDevice d = AdbTransportManager.bySpec(serial);
+                    if (d == null || !d.isOnline()) {
+                        writeFail(out, "device '" + serial + "' not found");
+                        return true;
+                    }
+                    id = TransportSelection.transportIdOf(d);
+                }
+                writeOkayPayload(out, String.valueOf(id));
                 return true;
+            }
             case "get-product":
                 writeOkayPayload(out, "termbox");
                 return true;
@@ -439,7 +469,7 @@ final class HostServices {
             case "wait-for-usb-device":
             case "wait-for-local-device":
             case "wait-for-disconnect":
-                // The single virtual device is always present; the wait is
+                // The virtual device is always present; the wait is
                 // immediately satisfied. adb_command() reads one final
                 // adb_status() after activation, so TWO bare OKAYs are
                 // required (see handleWaitForDevice).
@@ -489,7 +519,7 @@ final class HostServices {
             String local = spec.substring(0, semi);
             String remote = spec.substring(semi + 1);
             StringBuilder err = new StringBuilder();
-            int resolvedTcpPort = mForwards.addForward(false, local, remote, norebind, err);
+            int resolvedTcpPort = mForwards.addForward(false, local, remote, norebind, err, serial);
             if (resolvedTcpPort < 0) {
                 writeFail(out, resolvedTcpPort == ForwardRegistry.ERR_CANNOT_REBIND
                     ? "cannot rebind existing socket"
@@ -512,20 +542,51 @@ final class HostServices {
             return true;
         }
         if (rest.startsWith("connect:")) {
-            // adb connect <addr>: this bridge has no network transports; the
-            // reply is a query-style human-readable message (adb_query).
+            // `adb connect <addr>`: a REAL network transport attempt against
+            // the given adbd. Succeeds only when the remote speaks ADB.
             String addr = rest.substring("connect:".length());
-            writeOkayPayload(out, "cannot connect to " + addr
-                + ": network transports are not supported by this bridge");
+            String host = addr;
+            int port = 5555;
+            int colon = addr.lastIndexOf(':');
+            if (colon > 0) {
+                host = addr.substring(0, colon);
+                try {
+                    port = Integer.parseInt(addr.substring(colon + 1));
+                } catch (NumberFormatException e) {
+                    writeOkayPayload(out, "cannot connect to " + addr + ": bad port");
+                    return true;
+                }
+            }
+            String msg = AdbTransportManager.connect(host, port);
+            writeOkayPayload(out, msg);
             return true;
         }
         if (rest.startsWith("disconnect:")) {
-            // adb disconnect [<addr>]: nothing is ever connected remotely.
-            writeOkayPayload(out, "");
+            // `adb disconnect [<addr>]`: drop matching live transports.
+            String addr = rest.substring("disconnect:".length()).trim();
+            if (addr.isEmpty()) {
+                writeOkayPayload(out, AdbTransportManager.disconnect(null, null));
+                return true;
+            }
+            String host = addr;
+            Integer port = null;
+            int colon = addr.lastIndexOf(':');
+            if (colon > 0) {
+                host = addr.substring(0, colon);
+                try {
+                    port = Integer.parseInt(addr.substring(colon + 1));
+                } catch (NumberFormatException e) {
+                    writeOkayPayload(out, "error: bad port in '" + addr + "'\n");
+                    return true;
+                }
+            } else {
+                port = 5555; // AOSP disconnect defaults to :5555 when omitted
+            }
+            writeOkayPayload(out, AdbTransportManager.disconnect(host, port));
             return true;
         }
         if (serial != null) {
-            // Any other serial-scoped query on our single device.
+            // Any other serial-scoped query on a device we know.
             d("host service", "unhandled serial-scoped: " + rest + " serial=" + serial);
             writeFail(out, "device '" + serial + "' not found");
             return true;
@@ -539,8 +600,8 @@ final class HostServices {
 
     /**
      * Returns true if the given service string is a device service (shell/exec/sync/
-     * reverse/track-jdwp/transport-connect) that should be delegated to
-     * DeviceServices rather than handled as a host query.
+     * reverse/track-jdwp/transport-connect) that should be dispatched as a
+     * device service rather than handled as a host query.
      */
     private static boolean isDeviceService(String service) {
         return service.equals("sync:")
@@ -553,39 +614,38 @@ final class HostServices {
             || service.startsWith("localabstract:");
     }
 
-    /**
-     * Whether the given transport-id string names a transport this bridge has.
-     *
-     * The bridge exposes exactly one transport (see devicesList() and
-     * get-transport-id), so any other id is as unknown as a bogus serial — adb
-     * must not silently retarget `adb -t <id>` at it.
-     */
-    private static boolean knownTransportId(String id) {
-        if (!isTransportIdSyntax(id)) return false;
-        try {
-            return Long.parseLong(id) == 1;
-        } catch (NumberFormatException e) {
-            return false;
-        }
-    }
-
-    /** Whether the string parses as a transport id at all (AOSP ParseUint). */
-    private static boolean isTransportIdSyntax(String id) {
-        if (id == null || id.isEmpty()) return false;
-        for (int i = 0; i < id.length(); i++) {
-            if (!Character.isDigit(id.charAt(i))) return false;
-        }
-        return true;
-    }
-
-    /** Long-lived host:track-devices stream. */
+    /** Long-lived host:track-devices stream; pushes on device-list changes. */
     private void handleTrackDevices(InputStream in, OutputStream out) throws IOException {
         writeMessage(out, DeviceServices.devicesList(false));
-        // Real adb pushes updates on device-list changes; we have exactly one
-        // "device", so the stream just stays open until the client closes it.
-        byte[] buf = new byte[4096];
-        while (in.read(buf) != -1) { /* client went away */ }
-        d("host service", "track-devices client closed");
+        // Real adb pushes updates on device-list changes; poll the registry so
+        // connects/disconnects reach `adb track-devices` and `adb wait-for`-
+        // style consumers honestly. Client departure is detected both by
+        // reads (EOF) and by writes (broken pipe).
+        String last = DeviceServices.devicesList(false);
+        byte[] probe = new byte[256];
+        try {
+            while (true) {
+                while (in.available() > 0) {
+                    if (in.read(probe) < 0) {
+                        d("host service", "track-devices client closed");
+                        return;
+                    }
+                }
+                String now = DeviceServices.devicesList(false);
+                if (!now.equals(last)) {
+                    writeMessage(out, now);
+                    last = now;
+                }
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
+            }
+        } catch (IOException e) {
+            d("host service", "track-devices client closed");
+        }
     }
 
     /** Thrown to unwind the connection when host:kill shuts the server down. */

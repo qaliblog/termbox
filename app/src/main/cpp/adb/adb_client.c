@@ -38,6 +38,15 @@
 
 #define die(...) die_at(__FILE__, __LINE__, __VA_ARGS__)
 
+/* Transport selection state (global options -s/-t/-d/-e) and the qualified
+ * device-service connect used by every transport-sensitive command. The
+ * definitions live with the connect/disconnect section below. */
+static const char* g_serial = NULL;
+static const char* g_transport_id = NULL;
+static int g_want_usb = 0;
+static int g_want_tcp = 0;
+static int adb_connect_device_service(const char* service, char* err, size_t errlen);
+
 static void die_at(const char* file, int line, const char* fmt, ...) {
     va_list ap;
     va_start(ap, fmt);
@@ -496,7 +505,7 @@ static int remote_shell(int use_shell_protocol, const char* type_arg, char escap
         fprintf(stderr, "error: memory\n");
         return 1;
     }
-    int fd = adb_connect_service(service, NULL, 0);
+    int fd = adb_connect_device_service(service, NULL, 0);
     free(service);
     if (fd < 0) {
         fprintf(stderr, "error: closed\n");
@@ -904,7 +913,6 @@ static int sync_pull_file(int fd, const char* rpath, const char* lpath, int copy
 }
 
 /* ---------- commands ---------- */
-
 static void print_devices(const char* payload) {
     printf("List of devices attached\n");
     if (payload) fputs(payload, stdout);
@@ -1071,7 +1079,7 @@ static int cmd_exec_out(int argc, char** argv) {
         if (i + 1 < argc) strcat(service, " ");
     }
     if (ensure_server() < 0) return 1;
-    int fd = adb_connect_service(service, NULL, 0);
+    int fd = adb_connect_device_service(service, NULL, 0);
     free(service);
     if (fd < 0) {
         fprintf(stderr, "error: closed\n");
@@ -1110,7 +1118,7 @@ static int cmd_push(int argc, char** argv) {
 
     int err = 0;
     char errbuf[256];
-    int fd = adb_connect_service("sync:", errbuf, sizeof(errbuf));
+    int fd = adb_connect_device_service("sync:", errbuf, sizeof(errbuf));
     if (fd < 0) {
         fprintf(stderr, "error: %s\n", errbuf);
         return 1;
@@ -1191,7 +1199,7 @@ static int cmd_pull(int argc, char** argv) {
     if (ensure_server() < 0) return 1;
 
     char errbuf[256];
-    int fd = adb_connect_service("sync:", errbuf, sizeof(errbuf));
+    int fd = adb_connect_device_service("sync:", errbuf, sizeof(errbuf));
     if (fd < 0) {
         fprintf(stderr, "error: %s\n", errbuf);
         return 1;
@@ -1269,7 +1277,7 @@ static int cmd_install(int argc, char** argv) {
     }
 
     char errbuf[256];
-    int fd = adb_connect_service(service, errbuf, sizeof(errbuf));
+    int fd = adb_connect_device_service(service, errbuf, sizeof(errbuf));
     if (fd < 0) {
         fprintf(stderr, "adb: connect error for create: %s\n", errbuf);
         return 1;
@@ -1301,7 +1309,7 @@ static int cmd_install(int argc, char** argv) {
     char svc2[SYNC_DATA_MAX];
     snprintf(svc2, sizeof(svc2), "exec:cmd package install-write -S %lld %d %s -",
              (long long)sb.st_size, session_id, basename_of(file));
-    int wfd = adb_connect_service(svc2, errbuf, sizeof(errbuf));
+    int wfd = adb_connect_device_service(svc2, errbuf, sizeof(errbuf));
     if (wfd < 0) {
         fprintf(stderr, "adb: connect error for write: %s\n", errbuf);
         return 1;
@@ -1338,7 +1346,7 @@ static int cmd_install(int argc, char** argv) {
     /* install-commit */
     char svc3[SYNC_DATA_MAX];
     snprintf(svc3, sizeof(svc3), "exec:cmd package install-commit %d", session_id);
-    int cfd = adb_connect_service(svc3, errbuf, sizeof(errbuf));
+    int cfd = adb_connect_device_service(svc3, errbuf, sizeof(errbuf));
     if (cfd < 0) {
         fprintf(stderr, "adb: connect error for finalize: %s\n", errbuf);
         return 1;
@@ -1398,7 +1406,7 @@ static int cmd_uninstall(int argc, char** argv) {
     }
     snprintf(service, sizeof(service), "exec:cmd package uninstall %s", pkg);
     char errbuf[256];
-    int fd = adb_connect_service(service, errbuf, sizeof(errbuf));
+    int fd = adb_connect_device_service(service, errbuf, sizeof(errbuf));
     if (fd < 0) {
         fprintf(stderr, "error: %s\n", errbuf);
         return 1;
@@ -1412,17 +1420,20 @@ static int cmd_uninstall(int argc, char** argv) {
 
 /* ---------- forward / reverse ---------- */
 
-static int cmd_forward(int argc, char** argv, int reverse) {
-    const char* prefix = reverse ? "reverse" : "forward";
+static int cmd_forward(int argc, char** argv, int reverse) {    const char* prefix = reverse ? "reverse" : "forward";
+    /* Prefix registry queries with host-serial:<serial>: when -s was given
+     * (AOSP commandline.cpp forward/reverse block). */
+    const char* hs_prefix = g_serial ? "host-serial:" : "host:";
+    const char* hs_middle = g_serial ? ":" : "";
     int norebind = 0;
     int i = 1;
     for (; i < argc; i++) {
         if (strcmp(argv[i], "--no-rebind") == 0) {
             norebind = 1;
         } else if (strcmp(argv[i], "--list") == 0) {
-            char service[128];
-            snprintf(service, sizeof(service), reverse ? "reverse:list-forward"
-                                                       : "host:list-forward");
+            char service[192];
+            snprintf(service, sizeof(service), "%s%s%slist-forward",
+                     hs_prefix, g_serial ? g_serial : "", hs_middle);
             int ok = 0;
             char err[256];
             char* payload = adb_query(service, &ok, err, sizeof(err));
@@ -1434,9 +1445,9 @@ static int cmd_forward(int argc, char** argv, int reverse) {
             free(payload);
             return 0;
         } else if (strcmp(argv[i], "--remove-all") == 0) {
-            char service[128];
-            snprintf(service, sizeof(service), reverse ? "reverse:killforward-all"
-                                                       : "host:killforward-all");
+            char service[192];
+            snprintf(service, sizeof(service), "%s%s%skillforward-all",
+                     hs_prefix, g_serial ? g_serial : "", hs_middle);
             int ok = 0;
             char err[256];
             char* payload = adb_query(service, &ok, err, sizeof(err));
@@ -1447,10 +1458,11 @@ static int cmd_forward(int argc, char** argv, int reverse) {
             free(payload);
             return 0;
         } else if (strcmp(argv[i], "--remove") == 0 && i + 1 < argc) {
-            char service[160];
-            snprintf(service, sizeof(service), reverse ? "reverse:killforward:%s"
-                                                       : "host:killforward:%s",
-                     argv[i + 1]);
+            char service[224];
+            snprintf(service, sizeof(service), reverse
+                 ? "%s%s%sreverse:killforward:%s"
+                 : "%s%s%skillforward:%s",
+                 hs_prefix, g_serial ? g_serial : "", hs_middle, argv[i + 1]);
             int ok = 0;
             char err[256];
             char* payload = adb_query(service, &ok, err, sizeof(err));
@@ -1474,13 +1486,28 @@ static int cmd_forward(int argc, char** argv, int reverse) {
     }
     char service[SYNC_DATA_MAX];
     if (reverse) {
-        /* Device-side service: "reverse:forward:<local>;<remote>" — sent
-         * verbatim, the dispatcher routes it after transport selection. */
+        /* Device-side service: "reverse:forward:<local>;<remote>". With -s it
+         * must be dispatched to THAT transport (device service → switch
+         * form); host-serial: refuses reverse as a host query. */
         snprintf(service, sizeof(service), "reverse:forward:%s%s;%s",
                  norebind ? "norebind:" : "", argv[i], argv[i + 1]);
+        if (g_serial) {
+            int fd = adb_connect_device_service(service, NULL, 0);
+            if (fd < 0) return 1;
+            /* Two OKAYs (connect + status), optional port string, then the
+             * stream closes — dump whatever follows, like the client does. */
+            char c;
+            while (read(fd, &c, 1) > 0) {
+            }
+            close(fd);
+            return 0;
+        }
     } else {
-        /* Host-side service: "host:forward[:norebind]:<local>;<remote>". */
-        snprintf(service, sizeof(service), "host:forward:%s%s;%s",
+        /* Host-side service: "host:forward[:norebind]:<local>;<remote>",
+         * serial-scoped via host-serial: so the server targets the right
+         * device for the remote endpoint. */
+        snprintf(service, sizeof(service), "%s%s%sforward:%s%s;%s",
+                 hs_prefix, g_serial ? g_serial : "", hs_middle,
                  norebind ? "norebind:" : "", argv[i], argv[i + 1]);
     }
     int ok = 0;
@@ -1490,6 +1517,133 @@ static int cmd_forward(int argc, char** argv, int reverse) {
         fprintf(stderr, "error: %s\n", err);
         return 1;
     }
+    free(payload);
+    return 0;
+}
+
+/* ---------- transport selection (global options) ---------- */
+
+/* Open a (possibly transport-switched) device service stream.
+ *
+ * Without a -s/-t/-d/-e selection this is the plain adb_connect_service.
+ * With -t it sends "host-transport-id:<id>:<service>" (one hex4 frame; the
+ * server dispatches the inner service after the switch). With -s or -d/-e it
+ * sends the transport switch first, consumes its reply, then sends the device
+ * service hex4-framed on the SAME socket (AOSP _adb_connect behavior; the
+ * server answers the switch with OKAY + 8 raw transport-id bytes which are
+ * consumed here). Returns the raw service stream fd, or -1 with err. */
+static int adb_connect_device_service(const char* service, char* err, size_t errlen) {
+    if (!g_serial && !g_transport_id && !g_want_usb && !g_want_tcp) {
+        return adb_connect_service(service, err, errlen);
+    }
+    int fd = socket_connect_server();
+    if (fd < 0) {
+        if (err && errlen) snprintf(err, errlen, "cannot connect to daemon");
+        return -1;
+    }
+    if (g_transport_id) {
+        char* qualified;
+        if (asprintf(&qualified, "host-transport-id:%s:%s", g_transport_id, service) < 0) {
+            close(fd);
+            if (err && errlen) snprintf(err, errlen, "out of memory");
+            return -1;
+        }
+        int rc = send_hex4(fd, qualified);
+        free(qualified);
+        if (rc < 0 || read_status(fd, err, errlen) < 0) {
+            close(fd);
+            return -1;
+        }
+        return fd;
+    }
+    /* Transport switch first: host:transport:<serial>, host:transport-usb
+     * (-d), or host:transport-local (-e). The switch reply is OKAY followed
+     * by the raw 8-byte transport id (new protocol). */
+    char* sw;
+    if (g_serial) {
+        if (asprintf(&sw, "host:transport:%s", g_serial) < 0) {
+            close(fd);
+            if (err && errlen) snprintf(err, errlen, "out of memory");
+            return -1;
+        }
+    } else {
+        sw = strdup(g_want_usb ? "host:transport-usb" : "host:transport-local");
+    }
+    if (!sw) {
+        close(fd);
+        if (err && errlen) snprintf(err, errlen, "out of memory");
+        return -1;
+    }
+    int rc = send_hex4(fd, sw);
+    free(sw);
+    if (rc < 0 || read_status(fd, err, errlen) < 0) {
+        close(fd);
+        return -1;
+    }
+    /* Consume the raw 8-byte transport id the new-protocol switch appends. */
+    char tid[8];
+    if (!read_full(fd, tid, 8)) {
+        /* Legacy server without the id bytes: tolerate, the service reply
+         * follows immediately. */
+    }
+    if (send_hex4(fd, service) < 0 || read_status(fd, err, errlen) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+/* ---------- connect / disconnect ---------- */
+
+/*
+ * ADB connect/disconnect are host-server operations: the server performs the
+ * TCP connect + CNXN/AUTH handshake (AOSP connect_service in adb.cpp) and
+ * owns the transport afterwards. The client just relays the verdict.
+ */
+static int cmd_connect(const char* addr) {
+    if (ensure_server() < 0) return 1;
+    /* No port given: default 5555, like the official client. */
+    char* spec = NULL;
+    if (strchr(addr, ':')) {
+        spec = strdup(addr);
+    } else if (asprintf(&spec, "%s:5555", addr) < 0) {
+        return 1;
+    }
+    char service[512];
+    snprintf(service, sizeof(service), "host:connect:%s", spec);
+    free(spec);
+    int ok = 0;
+    char err[256];
+    char* payload = adb_query(service, &ok, err, sizeof(err));
+    if (!payload) {
+        fprintf(stderr, "error: %s\n", err);
+        return 1;
+    }
+    /* AOSP connect_service: the verdict is printed verbatim; success is
+     * "connected to ...", anything else is an honest failure. */
+    fprintf(stderr, "%s\n", payload);
+    int ret = strncmp(payload, "connected", 9) == 0 ? 0 : 1;
+    free(payload);
+    return ret;
+}
+
+static int cmd_disconnect(const char* addr) {
+    if (ensure_server() < 0) return 1;
+    char service[512];
+    if (addr && *addr) {
+        snprintf(service, sizeof(service), "host:disconnect:%s", addr);
+    } else {
+        snprintf(service, sizeof(service), "host:disconnect:");
+    }
+    int ok = 0;
+    char err[256];
+    char* payload = adb_query(service, &ok, err, sizeof(err));
+    if (!payload) {
+        fprintf(stderr, "error: %s\n", err);
+        return 1;
+    }
+    /* Official client prints the server's message verbatim on stdout. */
+    fputs(payload, stdout);
     free(payload);
     return 0;
 }
@@ -1507,9 +1661,26 @@ static int cmd_start_server(void) {
 }
 
 static int cmd_wait_for_device(const char* state) {
-    (void)state;
     if (ensure_server() < 0) return 1;
-    /* the bridge device is always "device" state once reachable */
+    /* host-serial scoped waits are host queries; plain waits are handled by
+     * the server too (wait-for-* host services). Either way the reply is the
+     * standard two-OKAY adb_command form handled inside adb_query. */
+    char service[128];
+    if (g_serial) {
+        snprintf(service, sizeof(service), "host-serial:%s:wait-for-%s", g_serial,
+                 state ? state : "any");
+    } else {
+        snprintf(service, sizeof(service), "host:wait-for-%s",
+                 state ? state : "any");
+    }
+    int ok = 0;
+    char err[256];
+    char* payload = adb_query(service, &ok, err, sizeof(err));
+    if (!payload) {
+        fprintf(stderr, "error: %s\n", err);
+        return 1;
+    }
+    free(payload);
     return 0;
 }
 
@@ -1539,7 +1710,8 @@ static void usage(FILE* out) {
         " reverse --list\n"
         " reverse [--no-rebind] REMOTE LOCAL\n"
         " reverse --remove REMOTE\n"
-        " connect HOST[:PORT]      (unsupported by the bridge, honest error)\n"
+        " connect HOST[:PORT]      connect to a remote adbd (network transport)\n"
+        " disconnect [HOST[:PORT]] disconnect from a remote adbd\n"
         "\n"
         "shell:\n"
         " shell [-e ESCAPE] [-n] [-Tt] [-x] [COMMAND...]\n"
@@ -1562,7 +1734,7 @@ static void usage(FILE* out) {
         "server:\n"
         " start-server             ensure the app-owned server is running\n"
         " kill-server              kill the app-owned server\n"
-        " wait-for-<state>         wait for device state (always immediate here)\n");
+        " wait-for-<state>         wait for device state\n");
 }
 
 /* ---------- main ---------- */
@@ -1577,9 +1749,31 @@ int main(int argc, char** argv) {
         const char* a = argv[i];
         if (a[0] != '-' || a[1] == 0 || a[1] == ' ') break;
         if (strcmp(a, "-a") == 0) continue;
-        if (strcmp(a, "-d") == 0 || strcmp(a, "-e") == 0) continue;
-        if (strcmp(a, "-s") == 0 || strcmp(a, "-t") == 0 || strcmp(a, "-L") == 0 ||
-            strcmp(a, "-H") == 0 || strcmp(a, "-P") == 0) {
+        if (strcmp(a, "-d") == 0) {
+            g_want_usb = 1;
+            continue;
+        }
+        if (strcmp(a, "-e") == 0) {
+            g_want_tcp = 1;
+            continue;
+        }
+        if ((strcmp(a, "-s") == 0 || strcmp(a, "-t") == 0) && i + 1 < argc) {
+            if (strcmp(a, "-s") == 0) {
+                g_serial = argv[++i];
+            } else {
+                g_transport_id = argv[++i];
+            }
+            continue;
+        }
+        if (strncmp(a, "-s", 2) == 0 && a[2]) {
+            g_serial = a + 2;
+            continue;
+        }
+        if (strncmp(a, "-t", 2) == 0 && a[2]) {
+            g_transport_id = a + 2;
+            continue;
+        }
+        if (strcmp(a, "-L") == 0 || strcmp(a, "-H") == 0 || strcmp(a, "-P") == 0) {
             i++; /* consume value; server endpoint is loopback-managed */
             continue;
         }
@@ -1623,15 +1817,51 @@ int main(int argc, char** argv) {
         return cmd_shell(n, nargv);
     }
     if (strcmp(cmd, "get-state") == 0) {
-        printf("device\n");
+        /* Ask the server for the SELECTED transport's state (the official
+         * client does exactly this; default selection = the sole device). */
+        char service[192];
+        if (g_serial) {
+            snprintf(service, sizeof(service), "host-serial:%s:get-state", g_serial);
+        } else {
+            snprintf(service, sizeof(service), "host:get-state");
+        }
+        int ok = 0;
+        char err[256];
+        char* payload = adb_query(service, &ok, err, sizeof(err));
+        if (!payload) {
+            fprintf(stderr, "error: %s\n", err);
+            return 1;
+        }
+        printf("%s\n", payload);
+        free(payload);
         return 0;
     }
     if (strcmp(cmd, "get-serialno") == 0) {
-        printf(ADB_BRIDGE_SERIAL "\n");
+        char service[192];
+        snprintf(service, sizeof(service), "host:get-serialno");
+        int ok = 0;
+        char err[256];
+        char* payload = adb_query(service, &ok, err, sizeof(err));
+        if (!payload) {
+            fprintf(stderr, "error: %s\n", err);
+            return 1;
+        }
+        printf("%s\n", payload);
+        free(payload);
         return 0;
     }
     if (strcmp(cmd, "get-devpath") == 0) {
-        printf(ADB_BRIDGE_SERIAL "\n");
+        char service[192];
+        snprintf(service, sizeof(service), "host:get-devpath");
+        int ok = 0;
+        char err[256];
+        char* payload = adb_query(service, &ok, err, sizeof(err));
+        if (!payload) {
+            fprintf(stderr, "error: %s\n", err);
+            return 1;
+        }
+        printf("%s\n", payload);
+        free(payload);
         return 0;
     }
     if (strcmp(cmd, "wait-for-device") == 0 || strncmp(cmd, "wait-for-", 9) == 0) {
@@ -1640,12 +1870,14 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "start-server") == 0) return cmd_start_server();
     if (strcmp(cmd, "kill-server") == 0) return cmd_kill_server();
     if (strcmp(cmd, "connect") == 0) {
-        fprintf(stderr, "error: this device does not support wireless adb connect\n");
-        return 1;
+        if (sub_argc < 2) {
+            fprintf(stderr, "error: usage: adb connect HOST[:PORT]\n");
+            return 1;
+        }
+        return cmd_connect(sub_argv[1]);
     }
     if (strcmp(cmd, "disconnect") == 0) {
-        printf("disconnected everything\n");
-        return 0;
+        return cmd_disconnect(sub_argc >= 2 ? sub_argv[1] : NULL);
     }
     if (strcmp(cmd, "bugreport") == 0) {
         /* bugreport is a shell command */
@@ -1662,7 +1894,7 @@ int main(int argc, char** argv) {
     }
     if (strcmp(cmd, "jdwp") == 0) {
         /* no debuggable VMs visible */
-        int fd = adb_connect_service("track-jdwp", NULL, 0);
+        int fd = adb_connect_device_service("track-jdwp", NULL, 0);
         if (fd < 0) return 1;
         char buf[16];
         while (read(fd, buf, sizeof(buf)) > 0) {

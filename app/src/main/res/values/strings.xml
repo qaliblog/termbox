@@ -142,6 +142,47 @@
     <string name="termux_preferences_title">&TERMUX_APP_NAME;</string>
     <string name="termux_preferences_summary">Preferences for &TERMUX_APP_NAME; app</string>
 
+        <!-- ADB & Wireless Debugging Preferences -->
+        <string name="adb_preferences_title">ADB &amp; Wireless Debugging</string>
+        <string name="adb_preferences_summary">Network ADB transports, pairing and status</string>
+
+            <!-- ADB Status Category -->
+            <string name="adb_status_header">Status</string>
+            <string name="adb_status_title">ADB Status</string>
+            <string name="adb_status_unconfigured">Not configured</string>
+            <string name="adb_status_saved_endpoint">Saved endpoint — use “Connect” to reconnect</string>
+            <string name="adb_status_connected">Connected</string>
+            <string name="adb_status_connecting">Connecting…</string>
+            <string name="adb_status_disconnected">Disconnected</string>
+            <string name="adb_status_error">Error</string>
+            <string name="adb_status_working">Working…</string>
+            <string name="adb_device_title">Device</string>
+            <string name="adb_value_none">None</string>
+            <string name="adb_enabled_title">ADB network transports</string>
+            <string name="adb_enabled_off">Disabled — guest `adb connect` will fail</string>
+            <string name="adb_enabled_on">Enabled — guest `adb connect` may reach remote adbd</string>
+            <string name="adb_auto_reconnect_title">Automatic reconnect</string>
+            <string name="adb_auto_reconnect_off">Stay disconnected until manually reconnected</string>
+            <string name="adb_auto_reconnect_on">Reconnect automatically with exponential backoff (1s–30s)</string>
+
+            <!-- ADB Actions Category -->
+            <string name="adb_actions_header">Actions</string>
+            <string name="adb_connect_title">Connect</string>
+            <string name="adb_connect_summary">Connect to the saved endpoint (set by the last `adb connect host:port`)</string>
+            <string name="adb_disconnect_title">Disconnect</string>
+            <string name="adb_disconnect_summary">Drop all network ADB transports</string>
+            <string name="adb_refresh_title">Refresh Status</string>
+
+            <!-- ADB About Category -->
+            <string name="adb_about_header">About</string>
+            <string name="adb_public_key_title">ADB Public Key</string>
+            <string name="adb_public_key_summary">Show the RSA public key remote devices must authorize</string>
+            <string name="adb_public_key_prefix">Public key:</string>
+            <string name="adb_pairing_note_title">Pairing</string>
+            <string name="adb_pairing_note_summary">Wireless Debugging pairing (Android 11+ SPAKE2+) is not supported yet — classic RSA authorization and legacy TCP/IP (adb tcpip 5555) devices are. Accept the RSA dialog on the target device to authorize TermBox.</string>
+            <string name="adb_error_key">Cannot read ADB key: %1$s</string>
+            <string name="adb_error_generic">Error: %1$s</string>
+
         <!-- Debugging Preferences -->
         <string name="termux_debugging_preferences_title">Debugging</string>
         <string name="termux_debugging_preferences_summary">Preferences for debugging</string>

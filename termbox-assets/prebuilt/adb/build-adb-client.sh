@@ -20,6 +20,9 @@ SRC="$(cd "$(dirname "$SRC")" && pwd)/$(basename "$SRC")"
 mkdir -p "$(dirname "$OUT")"
 
 # Find an NDK toolchain if one is configured.
+# Checks ANDROID_NDK_HOME / ANDROID_NDK / ANDROID_HOME/ndk-bundle plus any
+# versioned NDKs installed under ANDROID_HOME/ndk/<version> (the layout used
+# by android NDK installs and by GitHub Actions runners).
 NDK_BUILD=""
 if [ -n "$ANDROID_NDK_HOME" ] && [ -x "$ANDROID_NDK_HOME/ndk-build" ]; then
     NDK_BUILD="$ANDROID_NDK_HOME"
@@ -27,6 +30,12 @@ elif [ -n "$ANDROID_NDK" ] && [ -x "$ANDROID_NDK/ndk-build" ]; then
     NDK_BUILD="$ANDROID_NDK"
 elif [ -x "$ANDROID_HOME/ndk-bundle/ndk-build" ]; then
     NDK_BUILD="$ANDROID_HOME/ndk-bundle"
+elif [ -n "$ANDROID_HOME" ] && [ -d "$ANDROID_HOME/ndk" ]; then
+    # Pick the highest installed NDK version under $ANDROID_HOME/ndk.
+    LATEST_NDK="$(ls -1d "$ANDROID_HOME"/ndk/* 2>/dev/null | sort -V | tail -n 1 || true)"
+    if [ -n "$LATEST_NDK" ] && [ -x "$LATEST_NDK/ndk-build" ]; then
+        NDK_BUILD="$LATEST_NDK"
+    fi
 fi
 
 if [ -n "$NDK_BUILD" ]; then
@@ -36,6 +45,11 @@ if [ -n "$NDK_BUILD" ]; then
         echo "[adb] Cross-building with NDK: $TOOLCHAIN/aarch64-linux-android21-clang"
         "$TOOLCHAIN/aarch64-linux-android21-clang" -std=c11 -O2 -Wall -Wextra \
             -static -o "$OUT" "$SRC"
+        if [ ! -s "$OUT" ]; then
+            echo "[adb] NDK build produced no output" >&2
+            exit 1
+        fi
+        echo "[adb] Built $OUT"
         exit 0
     fi
     echo "[adb] NDK found at $NDK_BUILD but no aarch64 clang wrapper; falling back to host gcc."

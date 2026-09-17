@@ -4,6 +4,9 @@ import android.net.LocalServerSocket;
 import android.net.LocalSocketAddress;
 import android.net.LocalSocket;
 
+import com.termux.app.adb.remote.AdbTransportManager;
+import com.termux.app.adb.remote.RemoteDevice;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -69,6 +72,18 @@ final class ForwardRegistry {
      */
     static int addForward(boolean reverse, String local, String remote, boolean norebind,
                           StringBuilder errorOut) {
+        return addForward(reverse, local, remote, norebind, errorOut, null);
+    }
+
+    /**
+     * Register a listener for local;remote, targeting the device selected by
+     * {@code serial} (null = the bridge's virtual device). For a network
+     * transport the remote endpoint is opened through the transport, so the
+     * connection happens on the REMOTE device — exactly what a workstation
+     * `adb -s <serial> forward` does.
+     */
+    static int addForward(boolean reverse, String local, String remote, boolean norebind,
+                          StringBuilder errorOut, String serial) {
         synchronized (sLock) {
             for (int i = 0; i < sForwards.size(); i++) {
                 Forward f = sForwards.get(i);
@@ -83,12 +98,12 @@ final class ForwardRegistry {
                 // thread's own close and fail with EADDRINUSE. A repurpose
                 // resolves no port either (AOSP leaves resolved_tcp_port 0), so
                 // no port string is sent back for it.
-                f.repoint(remote);
+                f.repoint(remote, serial);
                 return 0;
             }
             Forward f;
             try {
-                f = new Forward(reverse, local, remote);
+                f = new Forward(reverse, local, remote, serial);
             } catch (IOException e) {
                 TermboxAdbBridge.logWarn(LOG_TAG,
                     "forward " + local + " failed: " + e.getMessage());
@@ -172,15 +187,19 @@ final class ForwardRegistry {
         final String localSpec;
         /** Relay target; replaced in place by a rebind (AOSP install_listener). */
         private volatile String mRemoteSpec;
+        /** Device the remote endpoint lives on; null = virtual device. */
+        private volatile String mSerial;
         /** Port actually bound for a tcp:0 listener; 0 otherwise. */
         final int resolvedTcpPort;
         private final Listener mListener;
         private Thread mThread;
         private volatile boolean mRunning;
 
-        Forward(boolean reverse, String localSpec, String remoteSpec) throws IOException {
+        Forward(boolean reverse, String localSpec, String remoteSpec, String serial)
+            throws IOException {
             this.reverse = reverse;
             this.mRemoteSpec = remoteSpec;
+            this.mSerial = serial;
             ListenerAndPort lp = openListener(localSpec);
             this.mListener = lp.listener;
             this.resolvedTcpPort = lp.port;
@@ -190,8 +209,9 @@ final class ForwardRegistry {
         }
 
         /** Point this listener at a new remote endpoint, keeping its socket. */
-        void repoint(String remoteSpec) {
+        void repoint(String remoteSpec, String serial) {
             mRemoteSpec = remoteSpec;
+            mSerial = serial;
         }
 
         void start() {
@@ -223,7 +243,7 @@ final class ForwardRegistry {
             Thread t = new Thread(() -> {
                 Connection remote = null;
                 try {
-                    remote = connectRemote(mRemoteSpec);
+                    remote = connectRemote(mRemoteSpec, mSerial);
                 } catch (IOException e) {
                     try { client.close(); } catch (IOException ignored) {}
                     return;
@@ -243,8 +263,9 @@ final class ForwardRegistry {
 
     // ---------- endpoint plumbing ----------
 
-    /** Abstraction over java.net sockets and android.net.LocalSocket. */
-    private interface Connection {
+    /** Abstraction over java.net sockets, android.net.LocalSocket, and
+     * remote-transport streams. */
+    interface Connection {
         InputStream getInputStream() throws IOException;
 
         OutputStream getOutputStream() throws IOException;
@@ -295,6 +316,49 @@ final class ForwardRegistry {
         @Override
         public void close() throws IOException {
             mSocket.close();
+        }
+    }
+
+    /** Connection view over a remote-transport service stream. */
+    private static final class RemoteStreamConnection implements Connection {
+        final RemoteDevice.RemoteStream mStream;
+
+        RemoteStreamConnection(RemoteDevice.RemoteStream stream) {
+            mStream = stream;
+        }
+
+        @Override
+        public InputStream getInputStream() {
+            return mStream.inputStream();
+        }
+
+        @Override
+        public OutputStream getOutputStream() throws IOException {
+            return new OutputStream() {
+                @Override
+                public void write(int b) throws IOException {
+                    write(new byte[]{(byte) b}, 0, 1);
+                }
+
+                @Override
+                public void write(byte[] b, int off, int len) throws IOException {
+                    mStream.write(b, off, len);
+                }
+
+                @Override
+                public void flush() {
+                }
+
+                @Override
+                public void close() throws IOException {
+                    mStream.close();
+                }
+            };
+        }
+
+        @Override
+        public void close() {
+            mStream.close();
         }
     }
 
@@ -374,6 +438,38 @@ final class ForwardRegistry {
     }
 
     private static Connection connectRemote(String spec) throws IOException {
+        return connectRemote(spec, null);
+    }
+
+    /**
+     * Connect a remote endpoint, either on the virtual device (loopback/local
+     * sockets, as before) or through a network transport (the service string
+     * is forwarded to the remote adbd, which connects on its own host).
+     */
+    static Connection connectRemote(String spec, String serial) throws IOException {
+        if (serial != null && !DeviceServices.SERIAL.equals(serial)) {
+            RemoteDevice d = AdbTransportManager.bySpec(serial);
+            if (d == null || !d.isOnline()) {
+                throw new IOException("device '" + serial + "' not found");
+            }
+            RemoteDevice.RemoteStream stream = d.open(spec);
+            boolean accepted;
+            try {
+                accepted = stream.awaitAccepted(5000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                stream.close();
+                throw new IOException("interrupted while connecting to '" + spec + "'", e);
+            }
+            if (!accepted) {
+                IOException err = stream.getError();
+                stream.close();
+                throw new IOException(err != null
+                    ? "failed to connect to '" + spec + "': " + err.getMessage()
+                    : "failed to connect to '" + spec + "' on '" + serial + "'");
+            }
+            return new RemoteStreamConnection(stream);
+        }
         if (spec.startsWith("tcp:")) {
             int port = parsePort(spec);
             Socket s = new Socket();

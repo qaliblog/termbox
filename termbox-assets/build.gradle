@@ -673,26 +673,48 @@ task prepareTermBoxAssets {
         // ========================================
         // 3.7 ADB BRIDGE GUEST CLIENT (/usr/bin/adb)
         // ========================================
+        // The client is always built FROM SOURCE when an NDK is available (CI
+        // installs one explicitly), so adb_client.c changes ship without anyone
+        // having to remember to refresh a committed binary. The committed
+        // prebuilt at termbox-assets/prebuilt/adb/adb is only a fallback for
+        // builds without an NDK (e.g. quick local asset preparation).
         logger.quiet("\n--- Preparing ADB bridge guest client ---")
         try {
             def adbBuildScript = new File(termboxAssetsDir, 'prebuilt/adb/build-adb-client.sh')
             def adbPrebuilt = new File(termboxAssetsDir, 'prebuilt/adb/adb')
             def adbDest = new File(termboxApkAssetsDir, 'adb/adb')
             adbDest.parentFile.mkdirs()
-            if (adbPrebuilt.exists() && adbPrebuilt.length() > 0) {
-                // Committed binary is the source of truth for reproducible builds.
+            boolean adbBuilt = false
+            if (adbBuildScript.exists()) {
+                def buildCmd = "sh ${adbBuildScript.absolutePath} ${adbDest.absolutePath}"
+                if (execCommand("Build adb guest client", "sh", "-c", buildCmd)
+                        && adbDest.exists() && adbDest.length() > 0) {
+                    // Verify the produced binary is a static ARM64 ELF; refuse to
+                    // package a client that cannot run in the ARM64 guest rootfs.
+                    def probe = ["sh", "-c", "file ${adbDest.absolutePath}"].execute()
+                    def probeOut = new StringBuilder()
+                    probe.consumeProcessOutput(probeOut, new StringBuilder())
+                    probe.waitFor()
+                    def fileType = probeOut.toString().trim()
+                    def isArm64 = fileType.contains("aarch64") || fileType.contains("ARM aarch64")
+                    def isStatic = fileType.contains("statically linked") || fileType.contains("static-pie")
+                    if (isArm64 && isStatic) {
+                        logger.quiet("  [adb] Built guest client from source (${adbDest.length()} bytes, ARM64 static)")
+                        adbBuilt = true
+                    } else {
+                        logger.warn("  [adb] Built client failed verification (${fileType})")
+                    }
+                }
+            }
+            if (!adbBuilt && adbPrebuilt.exists() && adbPrebuilt.length() > 0) {
+                // Fallback for NDK-less builds: committed binary.
                 java.nio.file.Files.copy(adbPrebuilt.toPath(), adbDest.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING)
                 logger.quiet("  [adb] Using committed prebuilt client (${adbPrebuilt.length()} bytes)")
-            } else if (adbBuildScript.exists()) {
-                // Build from source (NDK when available, host gcc otherwise).
-                def buildCmd = "sh ${adbBuildScript.absolutePath} ${adbDest.absolutePath}"
-                if (!execCommand("Build adb guest client", "sh", "-c", buildCmd)) {
-                    throw new GradleException("adb client build failed")
-                }
-                logger.quiet("  [adb] Built guest client (${adbDest.length()} bytes)")
-            } else {
-                throw new GradleException("adb client source and prebuilt binary both missing")
+                adbBuilt = true
+            }
+            if (!adbBuilt) {
+                throw new GradleException("adb client could not be built from source and no prebuilt binary exists")
             }
             assetsReady++
         } catch (Exception e) {

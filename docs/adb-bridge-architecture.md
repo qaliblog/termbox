@@ -2,7 +2,9 @@
 
 Status: reference design for the implemented bridge (`docs/`), version 1.0.
 Scope: TermBox `com.qali.termbox`, Android 15 / API 35 target, no root, no Magisk,
-no Wireless Debugging, no USB, no cloud.
+no USB, no cloud. Version 1.1 adds real network transports (`adb connect host:port`)
+to remote adbds: legacy TCP/IP ADB is fully supported; Android 11+ Wireless Debugging
+pairing (SPAKE2+ / mDNS) is intentionally NOT implemented (see §4.6).
 
 ---
 
@@ -420,7 +422,9 @@ every app start, like the other termbox runtime binaries).
 | `adb backup` | broken in modern Android | honest failure |
 | `jdwp:`/`track-jdwp` | lists debuggable VMs | `track-jdwp` streams empty list (no debuggable VMs visible) |
 | `run-as <non-debuggable>` | fails | same honest failure |
-| Wireless pairing/`adb connect` | mDNS/TLS | `connect` fails like a device-side server would without wireless |
+| Wireless Debugging pairing (Android 11+) | mDNS discovery + SPAKE2+ pairing over TLS (`libadb_pairing_connection`) | NOT implemented: the bridge speaks the classic CNXN/AUTH (RSA) handshake only. `adb connect <wlan-port>` to a Wireless Debugging endpoint fails honestly at the TLS/SPAKE2+ step. Use legacy TCP/IP ADB (`adb tcpip 5555` on the device, then `adb connect <host>:5555`) or pair once with any standard adb host; the remote transport then connects like any authorized host. |
+| `adb connect host:port` (legacy TCP/IP ADB) | server-side `connect_service`: TCP connect + CNXN/AUTH + transport registration | IMPLEMENTED (v1.1): `AdbTransportManager` performs a real CNXN/AUTH handshake (`RemoteDevice`) and the transport participates in device listing, `-s` selection, shell/sync/forward/reverse. |
+| `adb disconnect [host:port|all]` | removes the transport | IMPLEMENTED (v1.1) |
 | `abb:`/`abb_exec:` | binder | not advertised in features → official client never uses them |
 | `bugreportz`, `incremental install` | feature-gated | features not advertised → client falls back |
 
@@ -437,6 +441,7 @@ app/src/main/java/com/termux/app/adb/
   AdbServer.java                              smart-protocol server
   HostServices.java                           host: services
   DeviceServices.java                         device service dispatch
+  TransportSelection.java                     -s/-t/-d/-e acquire_one_transport semantics
   ForwardRegistry.java                        forward/reverse
   ShellRunner.java + AdbPty.java              shell/exec engine (+ PTY)
   DeviceCommandHandlers.java                  getprop/pm/am/… emulation & passthrough
@@ -444,6 +449,17 @@ app/src/main/java/com/termux/app/adb/
   FileSyncService.java                        sync v1 + v2 stat/ls
   LogcatService.java                          logcat passthrough
   SmartSocket.java                            hex4 framing helpers
+app/src/main/java/com/termux/app/adb/remote/  (v1.1: real network transports)
+  AdbPacket.java                              AOSP transport-local packet framing
+  AdbKeyPair.java                             Android pubkey encode + RSA-2048 SHA-1 token signing
+  AdbKeyStore.java                            app-private key storage (never in the guest rootfs)
+  RemoteDevice.java                           CNXN/AUTH handshake + OPEN/OKAY/WRTE/CLSE multiplexer
+  RemoteStreamService.java                    device-service relay over a remote transport
+  AdbTransportManager.java                    connect/disconnect registry, track-devices integration
+  AdbSettingsStore.java                       non-sensitive settings (SharedPreferences)
+app/src/main/java/com/termux/app/fragments/settings/AdbPreferencesFragment.java  Settings → ADB
+app/src/main/res/xml/adb_preferences.xml
+app/src/test/java/com/termux/app/adb/remote/  JVM tests incl. fake-adbd integration
 app/src/main/java/com/termux/app/TermuxInstaller.java   (+ extraction/install of adb client & server class check)
 app/src/main/java/com/termux/app/TermuxApplication.java (+ TermboxAdbBridge.start(this))
 docs/adb-bridge-architecture.md               this document
@@ -453,6 +469,10 @@ docs/adb-bridge-architecture.md               this document
 
 - Unit (JVM, in-repo tests where possible): smart-protocol framing round-trips, sync
   encode/decode golden vectors, install session state machine, service-string parser.
+  v1.1 adds `AdbPacketTest` (wire framing), `AdbKeyPairTest` (Android pubkey struct +
+  RSA signing) and `RemoteDeviceTest` — a fake in-process adbd exercising the full
+  CNXN/AUTH/OPEN/OKAY/WRTE/CLSE surface, maxdata clamping, pre-0x01000001 lockstep
+  writes, zero-checksum tolerance and honest failure modes.
 - On-device manual verification matrix: every command listed in the request §"Primary
   objective" from inside Ubuntu with the official semantics checked (exit codes, stream
   separation, `-t/-T/-x`, winsize resize in `adb shell` under `vi`-like programs,

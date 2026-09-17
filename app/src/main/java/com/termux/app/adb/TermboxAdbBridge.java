@@ -3,6 +3,7 @@ package com.termux.app.adb;
 import android.content.Context;
 import android.os.Environment;
 
+import com.termux.app.adb.remote.AdbTransportManager;
 import com.termux.shared.logger.Logger;
 
 import java.io.File;
@@ -49,6 +50,11 @@ public final class TermboxAdbBridge {
         // Backing services that need an application context.
         PackageInstallerBridge.init(app);
         sSyncPaths = new FileSyncPaths(app);
+
+        // Network transports: registry init + config-driven reconnect (spec
+        // §19: restore saved ADB configuration after app/OS restart).
+        AdbTransportManager.init(app);
+        AdbTransportManager.boot();
 
         // Enable debug logging if the app's log level is VERBOSE.
         try {
@@ -135,19 +141,19 @@ public final class TermboxAdbBridge {
 
     // Logging helpers keep the adb package classes free of direct Logger use.
 
-    static void logInfo(String tag, String message) {
+    public static void logInfo(String tag, String message) {
         Logger.logInfo(tag, message);
     }
 
-    static void logWarn(String tag, String message) {
+    public static void logWarn(String tag, String message) {
         Logger.logWarn(tag, message);
     }
 
-    static void logError(String tag, String message) {
+    public static void logError(String tag, String message) {
         Logger.logError(tag, message);
     }
 
-    static void logDebug(String tag, String message) {
+    public static void logDebug(String tag, String message) {
         Logger.logDebug(tag, message);
     }
 

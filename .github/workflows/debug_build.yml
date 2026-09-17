@@ -28,6 +28,26 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Ensure Android NDK (guest adb client)
+        shell: bash {0}
+        run: |
+          # The guest ADB client (app/src/main/cpp/adb/adb_client.c, installed into
+          # the Ubuntu rootfs as /usr/bin/adb) is built FROM SOURCE with the NDK
+          # during asset preparation, so client changes ship in the APK without a
+          # manual prebuilt refresh.
+          if ls "$ANDROID_HOME"/ndk/*/ndk-build >/dev/null 2>&1; then
+            echo "NDK already installed: $(ls -1d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
+          else
+            echo "No NDK found; installing ndk;27.0.12077973"
+            yes | "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager --licenses >/dev/null 2>&1 || true
+            "$ANDROID_HOME"/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973" >/tmp/sdkmanager-ndk.log 2>&1 || {
+              echo "sdkmanager NDK install failed:";
+              tail -30 /tmp/sdkmanager-ndk.log;
+              exit 1;
+            }
+            echo "Installed: $(ls -1d "$ANDROID_HOME"/ndk/* | sort -V | tail -n 1)"
+          fi
+
       - name: Cache TermBox assets
         uses: actions/cache@v4
         with:

@@ -2,10 +2,15 @@ package com.termux.app.adb;
 
 import android.content.Context;
 
+import com.termux.app.adb.remote.AdbTransportManager;
+import com.termux.app.adb.remote.RemoteDevice;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Device service dispatcher (the "adbd" role of the bridge).
@@ -51,25 +56,55 @@ final class DeviceServices {
     }
 
 
-    /** Serial this bridge advertises for the device. */
-
-    /** Devices that the bridge considers "known" (for transport selection). */
-    static boolean knownSerial(String serial) {
-        return SERIAL.equals(serial) || (serial == null) || serial.isEmpty();
+    /**
+     * Payload for host:devices[-l] — the live device list: the bridge's own
+     * virtual device (always present, the TermBox environment itself) plus
+     * every currently-online network transport, mirroring what a workstation
+     * adb server reports.
+     */
+    static String devicesList(boolean longForm) {
+        StringBuilder sb = new StringBuilder();
+        if (longForm) {
+            sb.append(SERIAL).append("\tdevice product:termbox model:termbox device:termbox")
+                .append(" transport_id:1\n");
+        } else {
+            sb.append(SERIAL).append("\tdevice\n");
+        }
+        for (RemoteDevice d : AdbTransportManager.devices()) {
+            if (!d.isOnline()) continue;
+            if (longForm) {
+                sb.append(d.getSerial()).append("\tdevice product:termbox_bridge model:termbox_bridge")
+                    .append(" device:termbox_bridge transport_id:")
+                    .append(TransportSelection.transportIdOf(d)).append('\n');
+            } else {
+                sb.append(d.getSerial()).append("\tdevice\n");
+            }
+        }
+        return sb.toString();
     }
 
-    /** Payload for host:devices[-l] (the client prints the header itself). */
-    static String devicesList(boolean longForm) {
-        if (longForm) {
-            return SERIAL + "\tdevice product:termbox model:termbox device:termbox"
-                + " transport_id:1\n";
+    /** Device state for a serial (host:get-state). */
+    static String stateForSerial(String serial) {
+        if (serial == null || serial.isEmpty() || SERIAL.equals(serial)) {
+            return "device";
         }
-        return SERIAL + "\tdevice\n";
+        RemoteDevice d = AdbTransportManager.bySpec(serial);
+        return (d != null && d.isOnline()) ? "device" : "unknown <serial>";
     }
 
     /** Dispatch a device service string. Always a raw stream on success. */
     static boolean handleDeviceService(Socket socket, InputStream in, OutputStream out,
                                        String service) throws IOException {
+        return handleDeviceService(socket, in, out, service, null);
+    }
+
+    /**
+     * Dispatch a device service string with the serial the client selected
+     * (null = default). Only the transport-connect family consults it; shell,
+     * exec, sync and friends run on this device regardless.
+     */
+    static boolean handleDeviceService(Socket socket, InputStream in, OutputStream out,
+                                       String service, String serial) throws IOException {
         d(service, "device service dispatch", service);
         if (service.equals("sync:")) {
             HostServices.writeOkay(out);
@@ -128,7 +163,7 @@ final class DeviceServices {
         }
         if (service.startsWith("tcp:") || service.startsWith("local:")
             || service.startsWith("localabstract:")) {
-            return handleTransportConnect(in, out, service);
+            return handleTransportConnect(serial, in, out, service);
         }
         return false;
     }
@@ -491,9 +526,25 @@ final class DeviceServices {
 
     // ---------- transport connect ----------
 
-    /** tcp:PORT / local:... device service: connect and relay. */
-    private static boolean handleTransportConnect(InputStream in, OutputStream out, String spec)
-        throws IOException {
+    /**
+     * tcp:PORT / local:... device service: connect and relay. The target is
+     * resolved against the SELECTED transport: on the virtual device it is a
+     * loopback socket in the TermBox network namespace; on a remote transport
+     * the service string is forwarded to the remote adbd verbatim, which
+     * connects on the REMOTE device.
+     */
+    private static boolean handleTransportConnect(String serial, InputStream in, OutputStream out,
+                                                  String spec) throws IOException {
+        // A remote transport: forward the service string verbatim (the remote
+        // adbd performs the connect on its own host).
+        if (serial != null && !SERIAL.equals(serial)) {
+            RemoteDevice d = AdbTransportManager.bySpec(serial);
+            if (d != null && d.isOnline()) {
+                return TransportSelection.remote(d).serve(null, in, out, spec);
+            }
+            HostServices.writeFail(out, "device '" + serial + "' not found");
+            throw new NoQueryTailException();
+        }
         HostServices.writeOkay(out);
         // The client will stream raw bytes both ways; relay through the same
         // plumbing forwards use. (Not exercised by the bundled client.)

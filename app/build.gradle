@@ -136,6 +136,13 @@ android {
     testOptions {
         unitTests {
             includeAndroidResources = true
+            all { test ->
+                // One JVM per test class: prevents cross-class pollution
+                // (Robolectric sandbox classloaders + JCA provider state)
+                // from making plain-JVM tests order-dependent on CI.
+                test.forkEvery 1
+                test.maxParallelForks 1
+            }
         }
     }
 

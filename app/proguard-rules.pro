@@ -10,3 +10,10 @@
 -dontobfuscate
 #-renamesourcefileattribute SourceFile
 #-keepattributes SourceFile,LineNumberTable
+
+# Conscrypt (TLS 1.3 keying-material export for Wireless Debugging) ships
+# adapters for pre-L Android's bundled Conscrypt whose platform classes
+# (com.android.org.conscrypt / org.apache.harmony.xnet.provider.jsse) never
+# exist on API 21+; the adapter paths are dead code at runtime.
+-dontwarn com.android.org.conscrypt.**
+-dontwarn org.apache.harmony.xnet.provider.jsse.**

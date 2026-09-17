@@ -32,7 +32,6 @@ import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
-import java.security.spec.RSAPrivateCrtKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 
 import javax.net.ssl.KeyManager;
@@ -147,19 +146,16 @@ public final class WirelessTls {
             byte[] pkcs8 = adbPair.getPrivateKeyPkcs8();
             PrivateKey priv = KeyFactory.getInstance("RSA")
                 .generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
-            // Derive the public key without assuming a CRT-specific PrivateKey
-            // implementation (key specs work across every JCA provider).
-            RSAPrivateCrtKeySpec spec;
-            try {
-                spec = KeyFactory.getInstance("RSA")
-                    .getKeySpec(priv, RSAPrivateCrtKeySpec.class);
-            } catch (java.security.spec.InvalidKeySpecException notCrt) {
-                throw new java.security.GeneralSecurityException(
-                    "ADB key is not a CRT RSA key", notCrt);
-            }
+            // Derive (n, e) from the PKCS#8 DER itself. getKeySpec(...,
+            // RSAPrivateCrtKeySpec.class) is NOT provider-agnostic: the JDK's
+            // RSA KeyFactory casts the PrivateKey to RSAPrivateCrtKey and
+            // throws ClassCastException for opaque key implementations (e.g.
+            // Conscrypt's), while other providers return the non-CRT
+            // RSAPrivateKeySpec. Parsing the DER works with every provider.
+            java.math.BigInteger[] modulusExponent = pkcs8RsaModulusExponent(pkcs8);
             RSAPublicKey pub = (RSAPublicKey) KeyFactory.getInstance("RSA")
                 .generatePublic(new RSAPublicKeySpec(
-                    spec.getModulus(), spec.getPublicExponent()));
+                    modulusExponent[0], modulusExponent[1]));
 
             X509Certificate cert = MiniCert.generate("termbox-adb", pub, priv);
 
@@ -177,6 +173,136 @@ public final class WirelessTls {
 
             sCert = cert;
             sKey = priv;
+        }
+    }
+
+    /**
+     * Extract (modulus, publicExponent) from a PKCS#8 RSAPrivateKey DER
+     * (RFC 8017 A.1.2): SEQUENCE { version, n, e, d, p, q, ... }. Only the
+     * two leading INTEGERs are read; the rest of the structure is skipped.
+     */
+    static java.math.BigInteger[] pkcs8RsaModulusExponent(byte[] pkcs8)
+        throws java.security.GeneralSecurityException {
+        try {
+            java.io.ByteArrayInputStream in = new java.io.ByteArrayInputStream(pkcs8);
+            DerReader outer = new DerReader(readTlv(in));   // PrivateKeyInfo
+            DerReader skipVersion = new DerReader(outer.next()); // version INTEGER
+            skipVersion.finish();
+            byte[] algorithmId = outer.next();               // AlgorithmIdentifier
+            new DerReader(algorithmId).finish();
+            byte[] privateKeyOctets = outer.next();          // OCTET STRING
+            // (Optional [0] attributes may follow — intentionally not read.)
+            DerReader pkcs1 = new DerReader(privateKeyOctets);
+            DerReader skipPkcs1Version = new DerReader(pkcs1.next());
+            skipPkcs1Version.finish();
+            java.math.BigInteger n = new java.math.BigInteger(pkcs1.next()); // modulus
+            java.math.BigInteger e = new java.math.BigInteger(pkcs1.next()); // publicExponent
+            // (d, p, q, dp, dq, qinv follow — intentionally not read.)
+            return new java.math.BigInteger[]{n, e};
+        } catch (java.io.IOException e) {
+            throw new java.security.GeneralSecurityException(
+                "malformed PKCS#8 RSA private key", e);
+        }
+    }
+
+    /** One DER TLV from {@code in}; returns tag byte followed by encoded contents. */
+    private static byte[] readTlv(java.io.ByteArrayInputStream in) throws java.io.IOException {
+        int tag = in.read();
+        if (tag < 0) throw new java.io.EOFException("DER: truncated tag");
+        int first = in.read();
+        if (first < 0) throw new java.io.EOFException("DER: truncated length");
+        int len;
+        if ((first & 0x80) == 0) {
+            len = first;
+        } else {
+            int count = first & 0x7f;
+            if (count == 0 || count > 4) {
+                throw new java.io.IOException("DER: unsupported length form");
+            }
+            len = 0;
+            for (int i = 0; i < count; i++) {
+                int b = in.read();
+                if (b < 0) throw new java.io.EOFException("DER: truncated long length");
+                len = (len << 8) | b;
+            }
+        }
+        byte[] contents = new byte[len];
+        int got = 0;
+        while (got < len) {
+            int n = in.read(contents, got, len - got);
+            if (n < 0) throw new java.io.EOFException("DER: truncated contents");
+            got += n;
+        }
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(tag);
+        writeDerLength(out, len);
+        out.write(contents);
+        return out.toByteArray();
+    }
+
+    private static void writeDerLength(java.io.ByteArrayOutputStream out, int len) {
+        if (len < 0x80) {
+            out.write(len);
+        } else if (len < 0x100) {
+            out.write(0x81);
+            out.write(len);
+        } else if (len < 0x10000) {
+            out.write(0x82);
+            out.write(len >>> 8);
+            out.write(len);
+        } else {
+            out.write(0x83);
+            out.write(len >>> 16);
+            out.write(len >>> 8);
+            out.write(len);
+        }
+    }
+
+    /** Minimal DER reader: wraps a TLV, iterates over its contents. */
+    private static final class DerReader {
+        private final java.io.ByteArrayInputStream mIn;
+
+        DerReader(byte[] tlv) throws java.io.IOException {
+            java.io.ByteArrayInputStream in = new java.io.ByteArrayInputStream(tlv);
+            int tag = in.read();
+            if (tag < 0) throw new java.io.IOException("DER: empty TLV");
+            int first = in.read();
+            if (first < 0) throw new java.io.IOException("DER: truncated length");
+            int len;
+            if ((first & 0x80) == 0) {
+                len = first;
+            } else {
+                int count = first & 0x7f;
+                if (count == 0 || count > 4) {
+                    throw new java.io.IOException("DER: unsupported length form");
+                }
+                len = 0;
+                for (int i = 0; i < count; i++) {
+                    int b = in.read();
+                    if (b < 0) throw new java.io.EOFException("DER: truncated long length");
+                    len = (len << 8) | b;
+                }
+            }
+            byte[] contents = new byte[len];
+            int got = 0;
+            while (got < len) {
+                int n = in.read(contents, got, len - got);
+                if (n < 0) throw new java.io.EOFException("DER: truncated contents");
+                got += n;
+            }
+            mIn = new java.io.ByteArrayInputStream(contents);
+        }
+
+        /** The next child TLV, positioned inside the parent's contents. */
+        byte[] next() throws java.io.IOException {
+            return readTlv(mIn);
+        }
+
+        /** Nothing but this TLV's contents may remain. */
+        void finish() throws java.io.IOException {
+            if (mIn.read() >= 0) {
+                throw new java.io.IOException("DER: trailing bytes");
+            }
         }
     }
 

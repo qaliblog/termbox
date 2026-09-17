@@ -54,6 +54,7 @@ public final class FakePairingServer {
     private volatile Thread mThread;
     private volatile boolean mAcceptRunning = true;
     private volatile String mFailure;
+    private final AtomicReference<Throwable> mFailureThrowable = new AtomicReference<>();
     private volatile byte[] mPasswordSnapshot;
     private volatile int mExchanges;
 
@@ -140,7 +141,10 @@ public final class FakePairingServer {
                 ssl.setEnabledProtocols(new String[]{"TLSv1.3"});
                 serve(ssl);
             } catch (Exception e) {
-                if (mAcceptRunning) mFailure = e.getMessage();
+                if (mAcceptRunning) {
+                    mFailureThrowable.set(e);
+                    mFailure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+                }
             }
         }
     }
@@ -205,7 +209,8 @@ public final class FakePairingServer {
             System.arraycopy(guid, 0, guidInfo, 1, guid.length);
             writeFrame(out, PairingConnection.TYPE_PEER_INFO, cipher.encrypt(guidInfo));
         } catch (Exception e) {
-            mFailure = e.getMessage();
+            mFailureThrowable.set(e);
+            mFailure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
         } finally {
             mDone.countDown();
         }
@@ -220,6 +225,23 @@ public final class FakePairingServer {
 
     public String failure() {
         return mFailure;
+    }
+
+    /**
+     * The device-side failure including its stack — so test failures show WHY
+     * the fake server died instead of only the client's broken-pipe symptom.
+     * serve() records its exception synchronously before the client's next
+     * write can fail, so no waiting is needed once the client has failed.
+     */
+    public String failureDetail() {
+        Throwable t = mFailureThrowable.get();
+        if (t == null) return mFailure; // protocol verdicts stay message-only
+        StringBuilder sb = new StringBuilder(t.toString());
+        StackTraceElement[] frames = t.getStackTrace();
+        for (int i = 0; i < frames.length && i < 12; i++) {
+            sb.append("\n\tat ").append(frames[i]);
+        }
+        return sb.toString();
     }
 
     public int exchanges() {

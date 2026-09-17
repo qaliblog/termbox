@@ -14,6 +14,9 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.junit.Assume.assumeTrue;
+
+import org.conscrypt.Conscrypt;
 
 import org.junit.After;
 import org.junit.Before;
@@ -28,6 +31,10 @@ public class PairingLoopbackTest {
 
     @Before
     public void setUp() throws Exception {
+        // The uber Conscrypt JNI native exists for x86_64 (CI) but not for
+        // aarch64 dev sandboxes; skip there rather than fail.
+        assumeTrue("Conscrypt native unavailable on this platform",
+            Conscrypt.isAvailable());
         mServer = new FakePairingServer();
     }
 
@@ -52,7 +59,8 @@ public class PairingLoopbackTest {
         assertEquals("client must present the pubkey line as its PeerInfo",
             "BASE64KEY termbox@termbox",
             new String(mServer.receivedKeyLine.get(), "US-ASCII"));
-        assertNull("no protocol failure on the device side", mServer.failure());
+        assertNull("no failure on the device side, got: " + mServer.failureDetail(),
+            mServer.failureDetail());
     }
 
     @Test
@@ -75,6 +83,11 @@ public class PairingLoopbackTest {
                 assertTrue("message must not echo secrets",
                     !e.getMessage().contains(banned));
             }
+            // The device side must report the SAME verdict — not some other
+            // crash masquerading as the pairing failure.
+            String detail = mServer.failureDetail();
+            assertTrue("device must report the wrong-code verdict, got: " + detail,
+                detail != null && detail.contains("wrong pairing code"));
         }
         assertEquals("no successful exchange recorded", 0, mServer.exchanges());
     }

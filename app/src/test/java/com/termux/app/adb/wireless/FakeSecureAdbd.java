@@ -50,6 +50,7 @@ public final class FakeSecureAdbd {
     private volatile Thread mThread;
     private volatile boolean mAcceptRunning = true;
     public volatile String failure;
+    public volatile Throwable failureThrowable;
 
     public FakeSecureAdbd() throws Exception {
         KeyPairGenerator gen = KeyPairGenerator.getInstance("RSA");
@@ -135,7 +136,10 @@ public final class FakeSecureAdbd {
                 ssl.setNeedClientAuth(true); // adbd requests the client cert
                 serve(ssl);
             } catch (Exception e) {
-                if (mAcceptRunning) failure = e.getMessage();
+                if (mAcceptRunning) {
+                    failureThrowable = e;
+                    failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+                }
             }
         }
     }
@@ -185,7 +189,8 @@ public final class FakeSecureAdbd {
                 }
             }
         } catch (Exception e) {
-            failure = e.getMessage();
+            failureThrowable = e;
+            failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
         }
     }
 
@@ -198,5 +203,17 @@ public final class FakeSecureAdbd {
             } catch (Exception ignored) {
             }
         }
+    }
+
+    /** Joins the accept thread and returns the device-side failure w/ stack. */
+    public String failureDetail() {
+        Throwable t2 = failureThrowable;
+        if (t2 == null) return failure;
+        StringBuilder sb = new StringBuilder(t2.toString());
+        StackTraceElement[] frames = t2.getStackTrace();
+        for (int i = 0; i < frames.length && i < 12; i++) {
+            sb.append("\n\tat ").append(frames[i]);
+        }
+        return sb.toString();
     }
 }

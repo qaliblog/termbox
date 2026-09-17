@@ -71,7 +71,8 @@ public class WirelessDebuggingTest {
         assertEquals("client must present the pubkey line as its PeerInfo",
             "BASE64KEY termbox@termbox",
             new String(mPairServer.receivedKeyLine.get(), "US-ASCII"));
-        assertNull("no protocol failure on the device side", mPairServer.failure());
+        assertNull("no failure on the device side, got: " + mPairServer.failureDetail(),
+            mPairServer.failureDetail());
     }
 
     @Test
@@ -94,6 +95,10 @@ public class WirelessDebuggingTest {
             for (String banned : new String[]{"123456", "999999", "BASE64KEY"}) {
                 assertTrue("message must not echo secrets", !e.getMessage().contains(banned));
             }
+            // The device side must report the SAME verdict — not another crash.
+            String detail = mPairServer.failureDetail();
+            assertTrue("device must report the wrong-code verdict, got: " + detail,
+                detail != null && detail.contains("wrong pairing code"));
         }
         assertEquals("no successful exchange recorded", 0, mPairServer.exchanges());
     }
@@ -141,7 +146,8 @@ public class WirelessDebuggingTest {
         String connectMsg = WirelessTransportManager.connect(
             "127.0.0.1", mAdbd.port);
         assertTrue("connect must succeed against the secure adbd, got: "
-            + connectMsg, connectMsg.startsWith("connected to"));
+            + connectMsg + " | adbd-side: " + mAdbd.failureDetail(),
+            connectMsg.startsWith("connected to"));
 
         WirelessDeviceStore.PairedDevice after = store.all().get(0);
         assertEquals("working ADB port must be remembered",
@@ -196,7 +202,8 @@ public class WirelessDebuggingTest {
         String msg = WirelessTransportManager.connectIfPaired("127.0.0.1",
             mAdbd.port);
         assertNotNull("paired endpoint must take the TLS path", msg);
-        assertTrue(msg, msg.startsWith("connected to"));
+        assertTrue(msg + " | adbd-side: " + mAdbd.failureDetail(),
+            msg.startsWith("connected to"));
     }
 
     @Test
@@ -217,14 +224,15 @@ public class WirelessDebuggingTest {
         assertEquals(cert, again);
 
         // The cert's public key must be the ADB RSA public key. Derive via
-        // KeySpec so this works under any JCA provider (no CRT interface cast).
+        // the PKCS#8 DER (WirelessTls' own parser) so this works under any
+        // JCA provider — getKeySpec(RSAPrivateCrtKeySpec.class) is not
+        // provider-agnostic (JDK casts to RSAPrivateCrtKey).
         java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
-        java.security.spec.RSAPrivateCrtKeySpec spec =
-            kf.getKeySpec(key, java.security.spec.RSAPrivateCrtKeySpec.class);
+        java.math.BigInteger[] ne = WirelessTls.pkcs8RsaModulusExponent(
+            key.getEncoded());
         java.security.interfaces.RSAPublicKey adbPub =
             (java.security.interfaces.RSAPublicKey) kf.generatePublic(
-                new java.security.spec.RSAPublicKeySpec(
-                    spec.getModulus(), spec.getPublicExponent()));
+                new java.security.spec.RSAPublicKeySpec(ne[0], ne[1]));
         assertEquals("TLS identity must bind to the ADB RSA key",
             adbPub, cert.getPublicKey());
     }

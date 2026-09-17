@@ -142,6 +142,13 @@ android {
                 // from making plain-JVM tests order-dependent on CI.
                 test.forkEvery 1
                 test.maxParallelForks 1
+                // Conscrypt's OpenJDK build (test-only TLS provider) uses
+                // reflection into java.net internals, which JPMS blocks on
+                // JDK 9+ — a documented requirement of the library. The
+                // on-device Conscrypt (AAR) is unaffected: Android has no
+                // module system.
+                test.jvmArgs '--add-opens', 'java.base/java.net=ALL-UNNAMED',
+                             '--add-exports', 'java.base/jdk.internal.misc=ALL-UNNAMED'
                 test.testLogging {
                     exceptionFormat = 'full'
                     showStandardStreams = false

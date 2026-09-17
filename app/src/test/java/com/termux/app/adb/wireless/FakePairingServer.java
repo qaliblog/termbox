@@ -140,10 +140,10 @@ public final class FakePairingServer {
                 ssl.setUseClientMode(false);
                 ssl.setEnabledProtocols(new String[]{"TLSv1.3"});
                 serve(ssl);
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 if (mAcceptRunning) {
-                    mFailureThrowable.set(e);
-                    mFailure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+                    mFailureThrowable.set(t);
+                    mFailure = t.getMessage() == null ? t.getClass().getName() : t.getMessage();
                 }
             }
         }
@@ -208,9 +208,9 @@ public final class FakePairingServer {
             byte[] guid = deviceGuid.getBytes(StandardCharsets.US_ASCII);
             System.arraycopy(guid, 0, guidInfo, 1, guid.length);
             writeFrame(out, PairingConnection.TYPE_PEER_INFO, cipher.encrypt(guidInfo));
-        } catch (Exception e) {
-            mFailureThrowable.set(e);
-            mFailure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+        } catch (Throwable t) {
+            mFailureThrowable.set(t);
+            mFailure = t.getMessage() == null ? t.getClass().getName() : t.getMessage();
         } finally {
             mDone.countDown();
         }

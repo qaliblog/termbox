@@ -183,26 +183,76 @@ public final class WirelessTls {
      */
     static java.math.BigInteger[] pkcs8RsaModulusExponent(byte[] pkcs8)
         throws java.security.GeneralSecurityException {
+        if (pkcs8 == null) {
+            throw new java.security.GeneralSecurityException(
+                "private key has no PKCS#8 encoding");
+        }
         try {
             java.io.ByteArrayInputStream in = new java.io.ByteArrayInputStream(pkcs8);
             DerReader outer = new DerReader(readTlv(in));   // PrivateKeyInfo
-            DerReader skipVersion = new DerReader(outer.next()); // version INTEGER
-            skipVersion.finish();
+            outer.next();                                    // version INTEGER
             byte[] algorithmId = outer.next();               // AlgorithmIdentifier
-            new DerReader(algorithmId).finish();
+            requireRsaAlgorithm(algorithmId);
             byte[] privateKeyOctets = outer.next();          // OCTET STRING
             // (Optional [0] attributes may follow — intentionally not read.)
-            DerReader pkcs1 = new DerReader(privateKeyOctets);
-            DerReader skipPkcs1Version = new DerReader(pkcs1.next());
-            skipPkcs1Version.finish();
-            java.math.BigInteger n = new java.math.BigInteger(pkcs1.next()); // modulus
-            java.math.BigInteger e = new java.math.BigInteger(pkcs1.next()); // publicExponent
+            DerReader octets = new DerReader(privateKeyOctets);
+            // The octets hold a complete RSAPrivateKey SEQUENCE (PKCS#1);
+            // unwrap it before reading the fields.
+            DerReader pkcs1 = new DerReader(octets.next());
+            pkcs1.next();                                    // PKCS#1 version
+            java.math.BigInteger n = new java.math.BigInteger(pkcs1.nextContents()); // modulus
+            java.math.BigInteger e = new java.math.BigInteger(pkcs1.nextContents()); // publicExponent
             // (d, p, q, dp, dq, qinv follow — intentionally not read.)
             return new java.math.BigInteger[]{n, e};
         } catch (java.io.IOException e) {
             throw new java.security.GeneralSecurityException(
                 "malformed PKCS#8 RSA private key", e);
         }
+    }
+
+    /** AlgorithmIdentifier must be rsaEncryption (1.2.840.113549.1.1.1). */
+    private static void requireRsaAlgorithm(byte[] algorithmIdTlv)
+        throws java.io.IOException {
+        DerReader alg = new DerReader(algorithmIdTlv);
+        byte[] oidTlv = alg.next();
+        // Full expected TLV: tag 0x06, length 9, then the OID contents.
+        byte[] expected = new byte[]{0x06, 0x09, 0x2A, (byte) 0x86, 0x48,
+            (byte) 0x86, (byte) 0xF7, 0x0D, 0x01, 0x01, 0x01};
+        if (!java.util.Arrays.equals(oidTlv, expected)) {
+            throw new java.io.IOException("not an RSA private key");
+        }
+    }
+
+    /** One DER TLV's contents from {@code in}; tag and length are consumed. */
+    private static byte[] readTlvContents(java.io.ByteArrayInputStream in)
+        throws java.io.IOException {
+        int tag = in.read();
+        if (tag < 0) throw new java.io.EOFException("DER: truncated tag");
+        int first = in.read();
+        if (first < 0) throw new java.io.EOFException("DER: truncated length");
+        int len;
+        if ((first & 0x80) == 0) {
+            len = first;
+        } else {
+            int count = first & 0x7f;
+            if (count == 0 || count > 4) {
+                throw new java.io.IOException("DER: unsupported length form");
+            }
+            len = 0;
+            for (int i = 0; i < count; i++) {
+                int b = in.read();
+                if (b < 0) throw new java.io.EOFException("DER: truncated long length");
+                len = (len << 8) | b;
+            }
+        }
+        byte[] contents = new byte[len];
+        int got = 0;
+        while (got < len) {
+            int n = in.read(contents, got, len - got);
+            if (n < 0) throw new java.io.EOFException("DER: truncated contents");
+            got += n;
+        }
+        return contents;
     }
 
     /** One DER TLV from {@code in}; returns tag byte followed by encoded contents. */
@@ -296,6 +346,11 @@ public final class WirelessTls {
         /** The next child TLV, positioned inside the parent's contents. */
         byte[] next() throws java.io.IOException {
             return readTlv(mIn);
+        }
+
+        /** The contents of the next child (header stripped) — for INTEGERs. */
+        byte[] nextContents() throws java.io.IOException {
+            return readTlvContents(mIn);
         }
 
         /** Nothing but this TLV's contents may remain. */

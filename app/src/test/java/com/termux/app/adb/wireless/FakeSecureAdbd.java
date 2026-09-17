@@ -135,10 +135,10 @@ public final class FakeSecureAdbd {
                 ssl.setEnabledProtocols(new String[]{"TLSv1.3"});
                 ssl.setNeedClientAuth(true); // adbd requests the client cert
                 serve(ssl);
-            } catch (Exception e) {
+            } catch (Throwable t) {
                 if (mAcceptRunning) {
-                    failureThrowable = e;
-                    failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+                    failureThrowable = t;
+                    failure = t.getMessage() == null ? t.getClass().getName() : t.getMessage();
                 }
             }
         }
@@ -188,9 +188,9 @@ public final class FakeSecureAdbd {
                     out.flush();
                 }
             }
-        } catch (Exception e) {
-            failureThrowable = e;
-            failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
+        } catch (Throwable t) {
+            failureThrowable = t;
+            failure = t.getMessage() == null ? t.getClass().getName() : t.getMessage();
         }
     }
 

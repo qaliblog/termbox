@@ -30,6 +30,9 @@ jobs:
       with:
         name: test-results-${{ github.run_id }}
         path: |
-          **/build/test-results/**/*.xml
+          app/build/test-results/testDebugUnitTest/*.xml
+          app/build/test-results/testReleaseUnitTest/*.xml
+          termux-shared/build/test-results/**/*.xml
+          terminal-view/build/test-results/**/*.xml
         if-no-files-found: ignore
         retention-days: 14

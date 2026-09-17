@@ -42,7 +42,7 @@ public class DeviceListWirelessTest {
 
     @After
     public void tearDown() {
-        WirelessTransportManager.disconnect(null, null);
+        WirelessTransportManager.clearStateForTest();
         if (mAdbd != null) mAdbd.stop();
     }
 

@@ -46,8 +46,10 @@ public class WirelessDebuggingTest {
 
     @After
     public void tearDown() {
-        // Drop transports and quiet the reconnect thread between tests.
-        WirelessTransportManager.disconnect(null, null);
+        // Full state reset: drops transports, suppresses the auto-reconnector
+        // (an explicit disconnect must not be undone by a stray reconnect),
+        // and interrupts any live reconnect thread between tests.
+        WirelessTransportManager.clearStateForTest();
         if (mPairServer != null) mPairServer.stop();
         if (mAdbd != null) mAdbd.stop();
     }
@@ -210,6 +212,35 @@ public class WirelessDebuggingTest {
     public void connectIfPairedIgnoresUnknownEndpoints() {
         assertNull("unpaired endpoint must not be hijacked into TLS",
             WirelessTransportManager.connectIfPaired("203.0.113.9", 5555));
+    }
+
+    @Test
+    public void explicitDisconnectSuppressesAutoReconnect() throws Exception {
+        mAdbd = new FakeSecureAdbd();
+        WirelessDeviceStore.get(mContext).put("adb-guid-suppress", "127.0.0.1",
+            mAdbd.port, null);
+
+        assertTrue("initial connect must succeed, got: "
+                + WirelessTransportManager.connect("127.0.0.1", mAdbd.port)
+                + " | adbd-side: " + mAdbd.failureDetail(),
+            WirelessTransportManager.bySpec("127.0.0.1:" + mAdbd.port) != null);
+
+        // The user says disconnect: this must stick for the session.
+        WirelessTransportManager.disconnect("127.0.0.1", mAdbd.port);
+        assertTrue("explicit disconnect must suppress auto-reconnect",
+            WirelessTransportManager.reconnectSuppressedForTest());
+
+        // Even when the fake adbd stays reachable, no reconnect may spawn a
+        // new transport for it within the backoff window (1 s first attempt).
+        Thread.sleep(2500);
+        assertNull("auto-reconnect must not undo an explicit disconnect",
+            WirelessTransportManager.bySpec("127.0.0.1:" + mAdbd.port));
+
+        // An explicit connect() clears the suppression again.
+        assertTrue(WirelessTransportManager.connect("127.0.0.1", mAdbd.port)
+                .startsWith("connected"));
+        assertTrue("explicit connect must re-enable auto-reconnect",
+            !WirelessTransportManager.reconnectSuppressedForTest());
     }
 
     @Test

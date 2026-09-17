@@ -141,8 +141,21 @@ public final class WirelessTransportManager {
      * secure CNXN handshake — no faked success (spec §23).
      */
     public static String connect(String host, int adbPort) {
+        return connectInternal(host, adbPort, true);
+    }
+
+    /**
+     * Until cleared by an explicit connect(), automatic reconnects stay
+     * suppressed: a user-issued disconnect (CLI or Settings) must not be
+     * silently undone by the reconnect loop during this app session. Boot
+     * restores connectivity in a fresh process (statics reset).
+     */
+    private static volatile boolean sReconnectSuppressed;
+
+    private static String connectInternal(String host, int adbPort, boolean manual) {
         Context app = sAppContext;
         if (app == null) return "error: bridge not started";
+        if (manual) sReconnectSuppressed = false;
         final String spec = host + ":" + adbPort;
 
         synchronized (sLock) {
@@ -214,6 +227,9 @@ public final class WirelessTransportManager {
 
     /** Drop one endpoint or every wireless transport. */
     public static String disconnect(String host, Integer port) {
+        // Explicit user intent: no automatic reconnect until the next
+        // explicit connect() (or a fresh process via boot()).
+        sReconnectSuppressed = true;
         StringBuilder sb = new StringBuilder();
         synchronized (sLock) {
             if (host == null || host.trim().isEmpty()) {
@@ -238,6 +254,22 @@ public final class WirelessTransportManager {
     /** Disconnect every wireless transport (Settings UI). */
     public static String disconnectAll() {
         return disconnect(null, null);
+    }
+
+    /** Full state reset between tests: transports, suppression, reconnect thread. */
+    public static void clearStateForTest() {
+        sReconnectSuppressed = true; // keep the stray reconnect thread out
+        disconnect(null, null);
+        Thread t = sReconnectThread;
+        if (t != null) t.interrupt();
+        synchronized (sLock) {
+            sDevices.clear();
+        }
+    }
+
+    /** Whether automatic reconnect is currently suppressed (test visibility). */
+    static boolean reconnectSuppressedForTest() {
+        return sReconnectSuppressed;
     }
 
     /** Snapshot of live wireless transports. */
@@ -297,6 +329,7 @@ public final class WirelessTransportManager {
     private static void maybeKickReconnect() {
         Context app = sAppContext;
         if (app == null) return;
+        if (sReconnectSuppressed) return;
         synchronized (sLock) {
             if (sReconnectThread != null && sReconnectThread.isAlive()) return;
             sReconnectThread = new Thread(WirelessTransportManager::reconnectLoop,
@@ -317,12 +350,13 @@ public final class WirelessTransportManager {
         while (true) {
             Context app = sAppContext;
             if (app == null) return;
+            if (sReconnectSuppressed) return;
             if (anyOnline()) return;
             boolean attempted = false;
             for (WirelessDeviceStore.PairedDevice d : WirelessDeviceStore.get(app).all()) {
                 if (d.lastAdbPort <= 0) continue; // never connected; nothing to try
                 attempted = true;
-                String msg = connect(d.host, d.lastAdbPort);
+                String msg = connectInternal(d.host, d.lastAdbPort, false);
                 if (msg.startsWith("connected") || msg.startsWith("already connected")) {
                     return;
                 }

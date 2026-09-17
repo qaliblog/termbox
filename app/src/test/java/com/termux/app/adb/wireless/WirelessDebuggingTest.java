@@ -216,13 +216,15 @@ public class WirelessDebuggingTest {
         X509Certificate again = WirelessTls.identityCert(mContext);
         assertEquals(cert, again);
 
-        // The cert's public key must be the ADB RSA public key.
+        // The cert's public key must be the ADB RSA public key. Derive via
+        // KeySpec so this works under any JCA provider (no CRT interface cast).
         java.security.KeyFactory kf = java.security.KeyFactory.getInstance("RSA");
-        java.security.interfaces.RSAPrivateCrtKey crt =
-            (java.security.interfaces.RSAPrivateCrtKey) key;
-        java.security.interfaces.RSAPublicKey adbPub = (java.security.interfaces.RSAPublicKey)
-            kf.generatePublic(new java.security.spec.RSAPublicKeySpec(
-                crt.getModulus(), crt.getPublicExponent()));
+        java.security.spec.RSAPrivateCrtKeySpec spec =
+            kf.getKeySpec(key, java.security.spec.RSAPrivateCrtKeySpec.class);
+        java.security.interfaces.RSAPublicKey adbPub =
+            (java.security.interfaces.RSAPublicKey) kf.generatePublic(
+                new java.security.spec.RSAPublicKeySpec(
+                    spec.getModulus(), spec.getPublicExponent()));
         assertEquals("TLS identity must bind to the ADB RSA key",
             adbPub, cert.getPublicKey());
     }

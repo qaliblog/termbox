@@ -30,9 +30,9 @@ import java.security.KeyFactory;
 import java.security.PrivateKey;
 import java.security.SecureRandom;
 import java.security.cert.X509Certificate;
-import java.security.interfaces.RSAPrivateCrtKey;
 import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.RSAPrivateCrtKeySpec;
 import java.security.spec.RSAPublicKeySpec;
 
 import javax.net.ssl.KeyManager;
@@ -147,9 +147,19 @@ public final class WirelessTls {
             byte[] pkcs8 = adbPair.getPrivateKeyPkcs8();
             PrivateKey priv = KeyFactory.getInstance("RSA")
                 .generatePrivate(new PKCS8EncodedKeySpec(pkcs8));
-            RSAPrivateCrtKey crt = (RSAPrivateCrtKey) priv;
+            // Derive the public key without assuming a CRT-specific PrivateKey
+            // implementation (key specs work across every JCA provider).
+            RSAPrivateCrtKeySpec spec;
+            try {
+                spec = KeyFactory.getInstance("RSA")
+                    .getKeySpec(priv, RSAPrivateCrtKeySpec.class);
+            } catch (java.security.spec.InvalidKeySpecException notCrt) {
+                throw new java.security.GeneralSecurityException(
+                    "ADB key is not a CRT RSA key", notCrt);
+            }
             RSAPublicKey pub = (RSAPublicKey) KeyFactory.getInstance("RSA")
-                .generatePublic(new RSAPublicKeySpec(crt.getModulus(), crt.getPublicExponent()));
+                .generatePublic(new RSAPublicKeySpec(
+                    spec.getModulus(), spec.getPublicExponent()));
 
             X509Certificate cert = MiniCert.generate("termbox-adb", pub, priv);
 

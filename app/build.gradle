@@ -142,6 +142,10 @@ android {
                 // from making plain-JVM tests order-dependent on CI.
                 test.forkEvery 1
                 test.maxParallelForks 1
+                test.testLogging {
+                    exceptionFormat = 'full'
+                    showStandardStreams = false
+                }
             }
         }
     }

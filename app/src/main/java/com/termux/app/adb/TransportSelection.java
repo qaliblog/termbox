@@ -82,6 +82,9 @@ final class TransportSelection {
         if (serial != null) {
             if (DeviceServices.SERIAL.equals(serial)) return virtual();
             RemoteDevice d = AdbTransportManager.bySpec(serial);
+            if (d == null || !d.isOnline()) {
+                d = com.termux.app.adb.wireless.WirelessTransportManager.bySpec(serial);
+            }
             if (d != null && d.isOnline()) return remote(d);
             return null;
         }

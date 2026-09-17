@@ -3,8 +3,11 @@
 Status: reference design for the implemented bridge (`docs/`), version 1.0.
 Scope: TermBox `com.qali.termbox`, Android 15 / API 35 target, no root, no Magisk,
 no USB, no cloud. Version 1.1 adds real network transports (`adb connect host:port`)
-to remote adbds: legacy TCP/IP ADB is fully supported; Android 11+ Wireless Debugging
-pairing (SPAKE2+ / mDNS) is intentionally NOT implemented (see §4.6).
+to remote adbds: legacy TCP/IP ADB is fully supported. Version 1.2 adds Android 11+
+Wireless Debugging: REAL pairing (`adb pair HOST:PAIRING_PORT`, SPAKE2 over TLS 1.3
+with RFC 8446 keying-material export) and REAL secure connections (`adb connect
+HOST:ADB_PORT` over the TLS transport, no A_AUTH — client cert is the identity).
+See §4.9.
 
 ---
 
@@ -422,7 +425,7 @@ every app start, like the other termbox runtime binaries).
 | `adb backup` | broken in modern Android | honest failure |
 | `jdwp:`/`track-jdwp` | lists debuggable VMs | `track-jdwp` streams empty list (no debuggable VMs visible) |
 | `run-as <non-debuggable>` | fails | same honest failure |
-| Wireless Debugging pairing (Android 11+) | mDNS discovery + SPAKE2+ pairing over TLS (`libadb_pairing_connection`) | NOT implemented: the bridge speaks the classic CNXN/AUTH (RSA) handshake only. `adb connect <wlan-port>` to a Wireless Debugging endpoint fails honestly at the TLS/SPAKE2+ step. Use legacy TCP/IP ADB (`adb tcpip 5555` on the device, then `adb connect <host>:5555`) or pair once with any standard adb host; the remote transport then connects like any authorized host. |
+| Wireless Debugging pairing (Android 11+) | mDNS discovery + SPAKE2+ pairing over TLS (`libadb_pairing_connection`) | IMPLEMENTED (v1.2, see §4.9): `adb pair HOST:PAIRING_PORT` runs the real AOSP pairing protocol (TLS 1.3 → keying export `adb-label\0` → SPAKE2 → AES-128-GCM PeerInfo); `adb connect HOST:ADB_PORT` uses the TLS transport with the unchanged CNXN engine and no A_AUTH (daemon/adb_wifi.cpp semantics). mDNS discovery is a Settings-side convenience (NsdManager), never required. |
 | `adb connect host:port` (legacy TCP/IP ADB) | server-side `connect_service`: TCP connect + CNXN/AUTH + transport registration | IMPLEMENTED (v1.1): `AdbTransportManager` performs a real CNXN/AUTH handshake (`RemoteDevice`) and the transport participates in device listing, `-s` selection, shell/sync/forward/reverse. |
 | `adb disconnect [host:port|all]` | removes the transport | IMPLEMENTED (v1.1) |
 | `abb:`/`abb_exec:` | binder | not advertised in features → official client never uses them |
@@ -457,6 +460,15 @@ app/src/main/java/com/termux/app/adb/remote/  (v1.1: real network transports)
   RemoteStreamService.java                    device-service relay over a remote transport
   AdbTransportManager.java                    connect/disconnect registry, track-devices integration
   AdbSettingsStore.java                       non-sensitive settings (SharedPreferences)
+app/src/main/java/com/termux/app/adb/wireless/ (v1.2: Android 11+ Wireless Debugging)
+  Spake2.java                                 BoringSSL spake25519.c port (Ed25519, adb roles/names)
+  PairingCipher.java                          pairing_auth AES-128-GCM (HKDF-SHA256, LE nonce counter)
+  PairingConnection.java                      AOSP pairing client (TLS 1.3, 6-byte frames, PeerInfo)
+  WirelessTls.java                            Conscrypt TLS 1.3 context + "adb-label\0" exporter
+  MiniCert.java                               self-signed X.509 v3 DER builder (ADB RSA key identity)
+  WirelessDeviceStore.java                    paired-device registry (guid/host/port; no secrets)
+  WirelessTransportManager.java               pair/connect/reconnect lifecycle + honest states
+  WirelessDiscovery.java                      NsdManager mDNS (_adb-tls-pairing/_adb-tls-connect), optional
 app/src/main/java/com/termux/app/fragments/settings/AdbPreferencesFragment.java  Settings → ADB
 app/src/main/res/xml/adb_preferences.xml
 app/src/test/java/com/termux/app/adb/remote/  JVM tests incl. fake-adbd integration
@@ -473,6 +485,14 @@ docs/adb-bridge-architecture.md               this document
   RSA signing) and `RemoteDeviceTest` — a fake in-process adbd exercising the full
   CNXN/AUTH/OPEN/OKAY/WRTE/CLSE surface, maxdata clamping, pre-0x01000001 lockstep
   writes, zero-checksum tolerance and honest failure modes.
+  v1.2 adds the wireless suite: `Spake2Test` (role agreement, determinism, on-curve
+  rejection scan), `PairingCipherTest` (RFC 5869 Test Case 3 vector, GCM counters,
+  tag-mismatch), `MiniCertTest` (JVM X.509 parse + verify + tamper detection),
+  `PairCliGrammarTest`, and — most importantly — `WirelessDebuggingTest` running the
+  REAL protocol end-to-end over loopback TLS: production `PairingConnection` vs
+  `FakePairingServer` (device-side pairing role over Conscrypt TLS 1.3), wrong-code
+  rejection, `FakeSecureAdbd` (no-AUTH CNXN inside TLS) connect/disconnect, store
+  persistence, and `DeviceListWirelessTest` for `adb devices`/`-s` integration.
 - On-device manual verification matrix: every command listed in the request §"Primary
   objective" from inside Ubuntu with the official semantics checked (exit codes, stream
   separation, `-t/-T/-x`, winsize resize in `adb shell` under `vi`-like programs,
@@ -482,6 +502,59 @@ docs/adb-bridge-architecture.md               this document
 - Regression guard: `adb devices` twice (server restart path), `adb kill-server` then
   any command (restarts), app restart (server rebinds), offline airplane-mode `push`
   (storage path unaffected).
+
+---
+
+### 4.9 Wireless Debugging (v1.2): pairing + secure transport
+
+Protocol sources verified line-by-line from AOSP
+`packages/modules/adb` (android.googlesource.com, main branch):
+
+| Component | AOSP reference | What it pins |
+|---|---|---|
+| Pairing wire format | `pairing_connection/pairing_connection.cpp` | 6-byte frame header `ver(u8)=1, type(u8), payload_size(u32 BE)`; client sends SPAKE2 msg first on the pairing socket; bounds `0 < len <= 2*8192` |
+| Packet types | `proto/pairing.proto` | `SPAKE2_MSG=0`, `PEER_INFO=1`; PeerInfo types `ADB_RSA_PUB_KEY=0`, `ADB_DEVICE_GUID=1`; PeerInfo struct = exactly 8192 bytes |
+| Password | `pairing_connection.cpp` `kExportedKeyLabel` | TLS 1.3 exporter, label `"adb-label\0"` (NUL included), 64 bytes; password = 6 ASCII digits ‖ exported material |
+| SPAKE2 | `pairing_auth/pairing_auth.cpp` → BoringSSL `crypto/curve25519/spake25519.c` | Ed25519 group; roles alice=`"adb pair client\0"` / bob=`"adb pair server\0"`; password-scalar low-3-bits adjustment; `x = sc_reduce(rnd) << 3`; SHA-512 length-prefixed transcript; 64-byte key |
+| Pairing cipher | `pairing_auth/aes_128_gcm.cpp` | HKDF-SHA256 (zero salt, info `"adb pairing_auth aes-128-gcm key"`, 16 B); nonce = 64-bit LE counter, top 4 bytes zero; no AAD; 16-byte tag appended; independent enc/dec counters |
+| Secure connect | `daemon/adb_wifi.cpp` `adbd_wifi_secure_connect` | TLS 1.3 with client certs, then `handle_online` + `send_connect` directly — NO A_AUTH token exchange; the client certificate matched against the pairing record IS the authentication |
+| Identity | `client/adb_wifi.cpp` | Certificate self-signs the ADB RSA key; our PeerInfo carries the same Android pubkey line as legacy AUTH, so adbd whitelists one key for both transports |
+| mDNS | `adb_mdns.h`, `daemon/mdns.cpp` | `_adb-tls-pairing._tcp.` (while a pairing dialog is open) and `_adb-tls-connect._tcp.`; convenience only — explicit `HOST:PORT` never requires mDNS |
+
+Implementation (all in `com.termux.app.adb.wireless`): `Spake2.java` is an
+independent pure-Java port of the BoringSSL algorithm (Apache-2.0 reference
+implementation cross-checked; no GPL code); TLS uses Conscrypt
+(`org.conscrypt:conscrypt-android`) because stock JSSE has no exporter API —
+`Conscrypt.exportKeyingMaterial` is the exact stand-in for BoringSSL's
+`SSL_export_keying_material`; `MiniCert.java` hand-encodes the DER for the
+self-signed v3 certificate (no public Android API builds X.509); the unchanged
+`RemoteDevice` CNXN engine runs on top of the TLS socket via
+`RemoteDevice.connectOverSocket`.
+
+Security properties:
+
+- The pairing code travels only over the loopback smart socket into the app
+  (`host:pair:<addr>` service + hex4-framed second message); it is never a
+  file, argv entry, env var, or log line on either side.
+- Nothing pairing-related is written to the Ubuntu rootfs. The RSA private key
+  stays in app-private storage (`AdbKeyStore`); the TLS cert derives from it
+  (persisted in `files/adb/`, owner-only); `WirelessDeviceStore` persists only
+  GUID/host/port/result — never the code, never keys.
+- No security bypasses: standard TLS 1.3, standard SPAKE2, standard adbd
+  authorization. If the pairing was revoked on the device, connect keeps
+  failing and the UI reports PAIRED-not-connected honestly.
+
+Known limitations (honest):
+
+- Pairing requires the user to read the 6-digit code from the device's
+  "Pair device with pairing code" dialog; TermBox cannot enable Wireless
+  Debugging or open that dialog itself (no public API).
+- Wireless Debugging ports change across toggles/reboots; after a reboot the
+  reconnect loop needs the device to re-announce or the user to reconnect
+  with the new port (mDNS discovery in Settings helps find it).
+- SPAKE2 here is not constant-time (BigInteger math). Acceptable: the secret
+  is a short-lived pairing code plus fresh TLS-exported material, and the
+  code is single-use.
 
 ---
 

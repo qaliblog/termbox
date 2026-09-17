@@ -80,6 +80,18 @@ final class DeviceServices {
                 sb.append(d.getSerial()).append("\tdevice\n");
             }
         }
+        // Wireless Debugging (Android 11+ TLS) transports list alongside the
+        // legacy TCP ones — indistinguishable from a workstation's viewpoint.
+        for (RemoteDevice d : com.termux.app.adb.wireless.WirelessTransportManager.devices()) {
+            if (!d.isOnline()) continue;
+            if (longForm) {
+                sb.append(d.getSerial()).append("\tdevice product:termbox_bridge model:termbox_bridge")
+                    .append(" device:termbox_bridge transport_id:")
+                    .append(TransportSelection.transportIdOf(d)).append('\n');
+            } else {
+                sb.append(d.getSerial()).append("\tdevice\n");
+            }
+        }
         return sb.toString();
     }
 
@@ -87,9 +99,11 @@ final class DeviceServices {
     static String stateForSerial(String serial) {
         if (serial == null || serial.isEmpty() || SERIAL.equals(serial)) {
             return "device";
-        }
-        RemoteDevice d = AdbTransportManager.bySpec(serial);
-        return (d != null && d.isOnline()) ? "device" : "unknown <serial>";
+        }            RemoteDevice d = AdbTransportManager.bySpec(serial);
+            if (d == null || !d.isOnline()) {
+                d = com.termux.app.adb.wireless.WirelessTransportManager.bySpec(serial);
+            }
+            return (d != null && d.isOnline()) ? "device" : "unknown <serial>";
     }
 
     /** Dispatch a device service string. Always a raw stream on success. */

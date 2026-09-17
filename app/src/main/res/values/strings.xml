@@ -179,8 +179,32 @@
             <string name="adb_public_key_summary">Show the RSA public key remote devices must authorize</string>
             <string name="adb_public_key_prefix">Public key:</string>
             <string name="adb_pairing_note_title">Pairing</string>
-            <string name="adb_pairing_note_summary">Wireless Debugging pairing (Android 11+ SPAKE2+) is not supported yet — classic RSA authorization and legacy TCP/IP (adb tcpip 5555) devices are. Accept the RSA dialog on the target device to authorize TermBox.</string>
-            <string name="adb_error_key">Cannot read ADB key: %1$s</string>
+            <string name="adb_pairing_note_summary">Wireless Debugging pairing (Android 11+, SPAKE2+ over TLS 1.3) is supported: use `adb pair HOST:PAIRING_PORT` in the terminal or the Pair action below, then `adb connect HOST:ADB_PORT`. Legacy TCP/IP devices (adb tcpip 5555) use classic RSA authorization — accept the RSA dialog on the target device.</string>
+            <string name="adb_wireless_header">Wireless Debugging</string>
+            <string name="adb_wireless_status_title">Wireless Status</string>
+            <string name="adb_wireless_not_paired">Not paired — pair from the device’s “Pair device with pairing code” screen</string>
+            <string name="adb_wireless_paired">Paired (not connected)</string>
+            <string name="adb_wireless_connecting">Connecting…</string>
+            <string name="adb_wireless_connected">Connected</string>
+            <string name="adb_wireless_error">Error</string>
+            <string name="adb_wireless_pair_title">Pair device</string>
+            <string name="adb_wireless_pair_summary">Enter the device IP, pairing port and 6-digit code from “Pair device with pairing code”</string>
+            <string name="adb_wireless_connect_title">Connect</string>
+            <string name="adb_wireless_connect_summary">Connect to the last paired device’s Wireless Debugging port</string>
+            <string name="adb_wireless_disconnect_title">Disconnect</string>
+            <string name="adb_wireless_disconnect_summary">Drop all Wireless Debugging transports</string>
+            <string name="adb_wireless_discover_title">Discover devices</string>
+            <string name="adb_wireless_discover_summary">Search the network for Wireless Debugging services (mDNS)</string>
+            <string name="adb_wireless_forget_title">Forget pairing</string>
+            <string name="adb_wireless_forget_summary">Remove saved Wireless Debugging pairing records</string>
+            <string name="adb_wireless_ip">IP / Host</string>
+            <string name="adb_wireless_pairing_port">Pairing port</string>
+            <string name="adb_wireless_pairing_code">Pairing code (6 digits)</string>
+            <string name="adb_wireless_pair_button">Pair</string>
+            <string name="adb_wireless_cancel_button">Cancel</string>
+            <string name="adb_wireless_discover_none">No Wireless Debugging services found — enter the address manually</string>
+            <string name="adb_wireless_discover_failed">Discovery unavailable on this device</string>
+            <string name="adb_error_key">Error loading ADB key: %1$s</string>
             <string name="adb_error_generic">Error: %1$s</string>
 
         <!-- Debugging Preferences -->

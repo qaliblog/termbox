@@ -135,6 +135,22 @@ public final class RemoteDevice implements Closeable {
             }
             throw new IOException("failed to connect to '" + spec + "': " + e.getMessage(), e);
         }
+        return connectOverSocket(socket, spec, keys, listener, timeoutMs);
+    }
+
+    /**
+     * Variant of {@link #connect} for transports whose socket is already
+     * established and security-wrapped — the Android 11+ Wireless Debugging
+     * path hands us a TLS 1.3 socket (client-cert identity, adb_wifi.cpp
+     * register_socket_transport use_tls=true). The CNXN handshake runs
+     * unchanged inside TLS: adbd's secure transports skip the legacy A_AUTH
+     * token flow (daemon/adb_wifi.cpp adbd_wifi_secure_connect calls
+     * handle_online + send_connect directly) because the client certificate
+     * matched against the pairing record IS the authentication.
+     */
+    public static RemoteDevice connectOverSocket(Socket socket, String spec,
+                                                 KeyProvider keys, Listener listener,
+                                                 int timeoutMs) throws IOException {
         RemoteDevice device = new RemoteDevice(socket, spec, keys, listener);
         try {
             device.handshake(timeoutMs);

@@ -541,6 +541,58 @@ public final class HostServices {
             }
             return true;
         }
+        if (rest.startsWith("pair:")) {
+            // `adb pair <addr>`: REAL Android 11+ Wireless Debugging pairing
+            // (SPAKE2 over TLS 1.3) executed by the app. Protocol shape:
+            //   1. activation reply (OKAY, or FAIL when the address is bad)
+            //   2. the client then sends a hex4-framed 6-digit pairing code
+            //      on the SAME socket — read here, kept only in this frame,
+            //      never stored or logged (the client prompts on its stderr
+            //      so the code is typed, not passed as an argument)
+            //   3. the pairing verdict, hex4-framed, then the socket closes.
+            // Not a query service: no trailing 0000 — unwound like device
+            // services via NoQueryTailException after the verdict is sent.
+            String addr = rest.substring("pair:".length()).trim();
+            String host = addr;
+            int port = 0;
+            int colon = addr.lastIndexOf(':');
+            if (colon > 0) {
+                host = addr.substring(0, colon);
+                try {
+                    port = Integer.parseInt(addr.substring(colon + 1));
+                } catch (NumberFormatException e) {
+                    port = -1;
+                }
+            }
+            if (host.isEmpty() || port <= 0 || port > 65535) {
+                writeFail(out, "invalid pairing address '" + addr + "'");
+                throw new DeviceServices.NoQueryTailException();
+            }
+            writeOkay(out);
+            // Read the 6-digit code the client sends after the prompt.
+            byte[] codeBuf = new byte[6];
+            try {
+                byte[] lenBuf = new byte[4];
+                readFully(in, lenBuf, 0, lenBuf.length);
+                int codeLen = parseHex4(lenBuf);
+                if (codeLen != 6) {
+                    writeFail(out, "bad pairing code length");
+                    throw new DeviceServices.NoQueryTailException();
+                }
+                readFully(in, codeBuf, 0, codeBuf.length);
+                String code = new String(codeBuf, StandardCharsets.US_ASCII);
+                String verdict = com.termux.app.adb.wireless.WirelessTransportManager
+                    .pair(host, port, code);
+                // Success is exactly "Successfully paired ..."; everything
+                // else is an honest failure message from the manager.
+                writeMessage(out, verdict);
+            } catch (DeviceServices.NoQueryTailException e) {
+                throw e;
+            } catch (IOException e) {
+                d("host service", "pair: client left before verdict: " + e);
+            }
+            throw new DeviceServices.NoQueryTailException();
+        }
         if (rest.startsWith("connect:")) {
             // `adb connect <addr>`: a REAL network transport attempt against
             // the given adbd. Succeeds only when the remote speaks ADB.
@@ -558,6 +610,15 @@ public final class HostServices {
                 }
             }
             String msg = AdbTransportManager.connect(host, port);
+            // AOSP connect_service prefers the secure (TLS) transport for
+            // endpoints it already knows are Wireless Debugging ports. If the
+            // plain attempt failed and this host is a paired wireless device,
+            // try the secure path before reporting failure.
+            if (!msg.startsWith("connected") && !msg.startsWith("already connected")) {
+                String wireless = com.termux.app.adb.wireless.WirelessTransportManager
+                    .connectIfPaired(host, port);
+                if (wireless != null) msg = wireless;
+            }
             writeOkayPayload(out, msg);
             return true;
         }
@@ -565,7 +626,8 @@ public final class HostServices {
             // `adb disconnect [<addr>]`: drop matching live transports.
             String addr = rest.substring("disconnect:".length()).trim();
             if (addr.isEmpty()) {
-                writeOkayPayload(out, AdbTransportManager.disconnect(null, null));
+                writeOkayPayload(out, com.termux.app.adb.wireless.WirelessTransportManager.disconnect(null, null)
+                    + AdbTransportManager.disconnect(null, null));
                 return true;
             }
             String host = addr;
@@ -582,7 +644,15 @@ public final class HostServices {
             } else {
                 port = 5555; // AOSP disconnect defaults to :5555 when omitted
             }
-            writeOkayPayload(out, AdbTransportManager.disconnect(host, port));
+            // Match against both registries: legacy TCP first, then the
+            // Wireless Debugging TLS transports (serials are host:port for
+            // both, so only one registry can hold the spec).
+            String legacyMsg = AdbTransportManager.disconnect(host, port);
+            if (legacyMsg.startsWith("error:")) {
+                writeOkayPayload(out, com.termux.app.adb.wireless.WirelessTransportManager.disconnect(host, port));
+                return true;
+            }
+            writeOkayPayload(out, legacyMsg);
             return true;
         }
         if (serial != null) {

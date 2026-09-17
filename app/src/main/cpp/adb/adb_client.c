@@ -1648,6 +1648,105 @@ static int cmd_disconnect(const char* addr) {
     return 0;
 }
 
+/* ---------- pair (Wireless Debugging, Android 11+) ---------- */
+
+/*
+ * `adb pair HOST:PAIRING_PORT` — performs REAL Android 11+ Wireless
+ * Debugging pairing (SPAKE2 over TLS 1.3). The TLS/SPAKE2 protocol itself
+ * lives in the Android app (PairingConnection, Java); this CLI only:
+ *   1. sends "host:pair:<addr>" and reads the OKAY/FAIL activation reply,
+ *   2. prompts "Enter pairing code: " locally,
+ *   3. sends the 6 digits hex4-framed on the SAME socket,
+ *   4. reads the hex4-framed verdict and prints it verbatim.
+ * The code travels only over the loopback smart-socket connection into the
+ * app — never a file, environment variable, or argv entry (ps-visible) —
+ * and is never stored by either side.
+ */
+static int cmd_pair(const char* addr) {
+    if (!addr || !*addr) {
+        fprintf(stderr, "error: usage: adb pair HOST:PAIRING_PORT\n");
+        return 1;
+    }
+    if (ensure_server() < 0) return 1;
+    int fd = socket_connect_server();
+    if (fd < 0) {
+        fprintf(stderr, "error: cannot connect to daemon\n");
+        return 1;
+    }
+    char service[512];
+    snprintf(service, sizeof(service), "host:pair:%s", addr);
+    if (send_hex4(fd, service) < 0) {
+        close(fd);
+        fprintf(stderr, "error: protocol failure\n");
+        return 1;
+    }
+    char err[256];
+    if (read_status(fd, err, sizeof(err)) < 0) {
+        close(fd);
+        fprintf(stderr, "error: %s\n", err);
+        return 1;
+    }
+    fprintf(stderr, "Enter pairing code: ");
+    fflush(stderr);
+    char line[64];
+    if (!fgets(line, sizeof(line), stdin)) {
+        close(fd);
+        fprintf(stderr, "\nerror: no pairing code entered\n");
+        return 1;
+    }
+    char digits[7];
+    int n = 0;
+    for (const char* p = line; *p; ++p) {
+        if (*p >= '0' && *p <= '9') {
+            if (n >= 6) {
+                close(fd);
+                fprintf(stderr, "error: pairing code must be exactly 6 digits\n");
+                return 1;
+            }
+            digits[n++] = *p;
+        } else if (*p == '\n' || *p == '\r') {
+            break;
+        } else if (*p == ' ' || *p == '\t') {
+            continue;
+        } else {
+            close(fd);
+            fprintf(stderr, "error: pairing code must be exactly 6 digits\n");
+            return 1;
+        }
+    }
+    if (n != 6) {
+        close(fd);
+        fprintf(stderr, "error: pairing code must be exactly 6 digits\n");
+        return 1;
+    }
+    digits[6] = 0;
+    if (write(fd, "0006", 4) != 4 || write(fd, digits, 6) != 6) {
+        close(fd);
+        fprintf(stderr, "error: failed to send the pairing code to the daemon\n");
+        return 1;
+    }
+    /* Read the hex4-framed verdict the app writes after the real pairing. */
+    char lenbuf[5];
+    lenbuf[4] = 0;
+    if (!read_full(fd, lenbuf, 4)) {
+        close(fd);
+        fprintf(stderr, "error: daemon closed during pairing\n");
+        return 1;
+    }
+    unsigned len = 0;
+    sscanf(lenbuf, "%4x", &len);
+    if (len >= sizeof(err)) len = (unsigned)(sizeof(err) - 1);
+    if (len && !read_full(fd, err, len)) {
+        close(fd);
+        fprintf(stderr, "error: daemon closed during pairing\n");
+        return 1;
+    }
+    err[len] = 0;
+    close(fd);
+    fprintf(stderr, "%s\n", err);
+    return strncmp(err, "Success", 7) == 0 ? 0 : 1;
+}
+
 static int cmd_kill_server(void) {
     int ok = 0;
     char err[256];
@@ -1712,6 +1811,7 @@ static void usage(FILE* out) {
         " reverse --remove REMOTE\n"
         " connect HOST[:PORT]      connect to a remote adbd (network transport)\n"
         " disconnect [HOST[:PORT]] disconnect from a remote adbd\n"
+        " pair HOST:PAIRING_PORT   pair with Wireless Debugging (Android 11+)\n"
         "\n"
         "shell:\n"
         " shell [-e ESCAPE] [-n] [-Tt] [-x] [COMMAND...]\n"
@@ -1869,6 +1969,13 @@ int main(int argc, char** argv) {
     }
     if (strcmp(cmd, "start-server") == 0) return cmd_start_server();
     if (strcmp(cmd, "kill-server") == 0) return cmd_kill_server();
+    if (strcmp(cmd, "pair") == 0) {
+        if (sub_argc < 2) {
+            fprintf(stderr, "error: usage: adb pair HOST:PAIRING_PORT\n");
+            return 1;
+        }
+        return cmd_pair(sub_argv[1]);
+    }
     if (strcmp(cmd, "connect") == 0) {
         if (sub_argc < 2) {
             fprintf(stderr, "error: usage: adb connect HOST[:PORT]\n");

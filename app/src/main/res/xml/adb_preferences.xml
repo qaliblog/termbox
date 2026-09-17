@@ -55,6 +55,48 @@
     </PreferenceCategory>
 
     <PreferenceCategory
+        app:key="adb_wireless_header"
+        app:title="@string/adb_wireless_header">
+
+        <Preference
+            app:key="adb_wireless_status"
+            app:persistent="false"
+            app:title="@string/adb_wireless_status_title"
+            app:summary="@string/adb_wireless_not_paired" />
+
+        <Preference
+            app:key="adb_wireless_pair"
+            app:persistent="false"
+            app:title="@string/adb_wireless_pair_title"
+            app:summary="@string/adb_wireless_pair_summary" />
+
+        <Preference
+            app:key="adb_wireless_connect"
+            app:persistent="false"
+            app:title="@string/adb_wireless_connect_title"
+            app:summary="@string/adb_wireless_connect_summary" />
+
+        <Preference
+            app:key="adb_wireless_disconnect"
+            app:persistent="false"
+            app:title="@string/adb_wireless_disconnect_title"
+            app:summary="@string/adb_wireless_disconnect_summary" />
+
+        <Preference
+            app:key="adb_wireless_discover"
+            app:persistent="false"
+            app:title="@string/adb_wireless_discover_title"
+            app:summary="@string/adb_wireless_discover_summary" />
+
+        <Preference
+            app:key="adb_wireless_forget"
+            app:persistent="false"
+            app:title="@string/adb_wireless_forget_title"
+            app:summary="@string/adb_wireless_forget_summary" />
+
+    </PreferenceCategory>
+
+    <PreferenceCategory
         app:key="adb_about"
         app:title="@string/adb_about_header">
 

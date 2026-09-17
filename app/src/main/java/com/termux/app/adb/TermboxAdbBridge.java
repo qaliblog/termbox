@@ -56,6 +56,11 @@ public final class TermboxAdbBridge {
         AdbTransportManager.init(app);
         AdbTransportManager.boot();
 
+        // Wireless Debugging (Android 11+ TLS pairing): registry init plus
+        // reconnect to previously paired devices whose ADB port is known.
+        com.termux.app.adb.wireless.WirelessTransportManager.init(app);
+        com.termux.app.adb.wireless.WirelessTransportManager.boot();
+
         // Enable debug logging if the app's log level is VERBOSE.
         try {
             com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences prefs =

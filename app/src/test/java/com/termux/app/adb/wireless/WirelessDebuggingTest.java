@@ -40,6 +40,7 @@ public class WirelessDebuggingTest {
     public void setUp() throws Exception {
         mContext = org.robolectric.RuntimeEnvironment.getApplication();
         WirelessTransportManager.init(mContext);
+        WirelessDebuggingEnabler.init(mContext);
         mPairServer = null;
         mAdbd = null;
     }
@@ -212,6 +213,57 @@ public class WirelessDebuggingTest {
     public void connectToLastPairedWithoutAnyPairingFailsCleanly() {
         String msg = WirelessTransportManager.connectToLastPaired(mContext, null);
         assertEquals("error: no paired device", msg);
+    }
+
+    // ---------- privileged no-Wi-Fi enabler (WRITE_SECURE_SETTINGS) ----------
+
+    @Test
+    @Config(sdk = 30) // Wireless Debugging (adb_wifi_enabled) is Android 11+
+    public void enablerStoresSettingAndReportsTlsPort() {
+        // Robolectric's Settings provider accepts the write (the real
+        // WRITE_SECURE_SETTINGS enforcement is Android-side); the TLS port
+        // comes from the test seam standing in for service.adb.tls.port.
+        WirelessDebuggingEnabler.setTestTlsPort(42567);
+        try {
+            String msg = WirelessDebuggingEnabler.enableInternal(mContext, 0);
+            assertTrue("must enable, got: " + msg,
+                msg.startsWith("Wireless Debugging enabled"));
+            assertTrue(WirelessDebuggingEnabler.isEnabled());
+            assertEquals("127.0.0.1:42567",
+                WirelessDebuggingEnabler.deviceLoopbackEndpoint());
+        } finally {
+            WirelessDebuggingEnabler.setTestTlsPort(0);
+        }
+        WirelessDebuggingEnabler.disableInternal(mContext);
+        assertTrue("disable must clear the setting",
+            !WirelessDebuggingEnabler.isEnabled());
+        assertNull(WirelessDebuggingEnabler.deviceLoopbackEndpoint());
+    }
+
+    @Test
+    public void enablerRefusesBelowAndroid11() {
+        String msg = WirelessDebuggingEnabler.enableInternal(mContext, 0);
+        // Config(sdk = 28): the honest version verdict, not a pretend success.
+        assertTrue(msg, msg.startsWith("error: Wireless Debugging needs Android 11+"));
+    }
+
+    @Test
+    public void connectToLastPairedFallsBackToLocalAdbdWhenUnpaired() throws Exception {
+        // No pairing records at all, but this very device's Wireless
+        // Debugging was enabled without Wi-Fi: Connect must find its own
+        // adbd TLS port on loopback.
+        mAdbd = new FakeSecureAdbd();
+        WirelessDebuggingEnabler.setTestTlsPort(mAdbd.port);
+        try {
+            String msg = WirelessTransportManager.connectToLastPaired(mContext, null);
+            assertTrue("must connect to the local adbd, got: " + msg
+                + " | adbd-side: " + mAdbd.failureDetail(),
+                msg.startsWith("connected to"));
+            assertNotNull(WirelessTransportManager.bySpec(
+                "127.0.0.1:" + mAdbd.port));
+        } finally {
+            WirelessDebuggingEnabler.setTestTlsPort(0);
+        }
     }
 
     @Test

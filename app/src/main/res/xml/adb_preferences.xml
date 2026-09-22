@@ -71,6 +71,12 @@
             app:summary="@string/adb_wireless_pair_summary" />
 
         <Preference
+            app:key="adb_wireless_enable_no_wifi"
+            app:persistent="false"
+            app:title="@string/adb_wireless_enable_no_wifi_title"
+            app:summary="@string/adb_wireless_enable_no_wifi_summary" />
+
+        <Preference
             app:key="adb_wireless_connect"
             app:persistent="false"
             app:title="@string/adb_wireless_connect_title"

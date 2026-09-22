@@ -164,7 +164,18 @@ public final class WirelessTransportManager {
         if (app == null) return "error: bridge not started";
         java.util.List<WirelessDeviceStore.PairedDevice> all =
             WirelessDeviceStore.get(app).all();
-        if (all.isEmpty()) return "error: no paired device";
+        if (all.isEmpty()) {
+            // No pairing records: if this very device's Wireless Debugging
+            // was enabled via WRITE_SECURE_SETTINGS (no Wi-Fi needed), its
+            // own adbd answers on loopback — connect to it directly.
+            String local = WirelessDebuggingEnabler.deviceLoopbackEndpoint();
+            if (local != null) {
+                int colon = local.lastIndexOf(':');
+                return connect("127.0.0.1",
+                    Integer.parseInt(local.substring(colon + 1)));
+            }
+            return "error: no paired device";
+        }
         WirelessDeviceStore.PairedDevice target = all.get(all.size() - 1);
 
         if (adbPort != null && adbPort > 0) {

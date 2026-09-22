@@ -61,6 +61,10 @@ public final class TermboxAdbBridge {
         com.termux.app.adb.wireless.WirelessTransportManager.init(app);
         com.termux.app.adb.wireless.WirelessTransportManager.boot();
 
+        // Settings-backed Wireless Debugging enabler (WRITE_SECURE_SETTINGS
+        // path for devices that gate the Settings toggle on Wi-Fi).
+        com.termux.app.adb.wireless.WirelessDebuggingEnabler.init(app);
+
         // Enable debug logging if the app's log level is VERBOSE.
         try {
             com.termux.shared.termux.settings.preferences.TermuxAppSharedPreferences prefs =

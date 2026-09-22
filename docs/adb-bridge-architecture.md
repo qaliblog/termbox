@@ -555,7 +555,20 @@ Known limitations (honest):
   from the pairing dialog's optional ADB-port field, the last successful
   connect stored with the pairing, or a bounded mDNS sweep of
   _adb-tls-connect._tcp — and reports "port unknown" honestly when all
-  three fail, never guessing.
+  three fail, never guessing. With no pairing records at all, Connect also
+  probes this device's own adbd TLS port (`service.adb.tls.port`) on
+  loopback, so the no-Wi-Fi enabler below feeds straight into Connect.
+- Wireless Debugging can be enabled without Wi-Fi
+  (`WirelessDebuggingEnabler`, Settings → ADB → "Enable Wireless Debugging
+  (no Wi-Fi)"): some ROMs grey the Developer-options toggle out until a
+  Wi-Fi network is connected, but the transport itself is gated only on
+  Settings.Global.ADB_WIFI_ENABLED (AdbService's settings observer) — the
+  "Wi-Fi required" rule is Settings-UI policy, and adbd's TLS server binds
+  any interface. With WRITE_SECURE_SETTINGS (declared in the manifest,
+  granted via `adb shell pm grant`), TermBox sets the setting directly,
+  keeps mobile data untouched, reads the resulting port from
+  `service.adb.tls.port`, and never fabricates success: without the grant
+  the action returns the exact grant command instead.
 - SPAKE2 here is not constant-time (BigInteger math). Acceptable: the secret
   is a short-lived pairing code plus fresh TLS-exported material, and the
   code is single-use.

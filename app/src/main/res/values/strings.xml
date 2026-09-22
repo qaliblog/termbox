@@ -189,6 +189,8 @@
             <string name="adb_wireless_error">Error</string>
             <string name="adb_wireless_pair_title">Pair device</string>
             <string name="adb_wireless_pair_summary">Enter the device IP, pairing port and 6-digit code from “Pair device with pairing code”</string>
+            <string name="adb_wireless_enable_no_wifi_title">Enable Wireless Debugging (no Wi-Fi)</string>
+            <string name="adb_wireless_enable_no_wifi_summary">Turn this device’s Wireless Debugging on without Wi-Fi (needs WRITE_SECURE_SETTINGS; mobile data is not interrupted)</string>
             <string name="adb_wireless_connect_title">Connect</string>
             <string name="adb_wireless_connect_summary">Connect to the last paired device’s Wireless Debugging port</string>
             <string name="adb_wireless_disconnect_title">Disconnect</string>

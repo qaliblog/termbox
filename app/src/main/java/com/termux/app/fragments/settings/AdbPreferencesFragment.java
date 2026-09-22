@@ -49,6 +49,7 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
     private static final String KEY_W_STATUS = "adb_wireless_status";
     private static final String KEY_W_PAIR = "adb_wireless_pair";
     private static final String KEY_W_CONNECT = "adb_wireless_connect";
+    private static final String KEY_W_ENABLE_NO_WIFI = "adb_wireless_enable_no_wifi";
     private static final String KEY_W_DISCONNECT = "adb_wireless_disconnect";
     private static final String KEY_W_DISCOVER = "adb_wireless_discover";
     private static final String KEY_W_FORGET = "adb_wireless_forget";
@@ -123,6 +124,21 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
         if (wirelessPair != null) {
             wirelessPair.setOnPreferenceClickListener(preference -> {
                 showPairingDialog();
+                return true;
+            });
+        }
+
+        Preference wirelessEnableNoWifi = findPreference(KEY_W_ENABLE_NO_WIFI);
+        if (wirelessEnableNoWifi != null) {
+            wirelessEnableNoWifi.setOnPreferenceClickListener(preference -> {
+                new AlertDialog.Builder(context)
+                    .setTitle(R.string.adb_wireless_enable_no_wifi_title)
+                    .setMessage(R.string.adb_wireless_enable_no_wifi_summary)
+                    .setPositiveButton(android.R.string.ok, (d, w) ->
+                        runAsync(() -> com.termux.app.adb.wireless.WirelessDebuggingEnabler
+                            .enable(context)))
+                    .setNegativeButton(android.R.string.cancel, null)
+                    .show();
                 return true;
             });
         }

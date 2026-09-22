@@ -69,12 +69,26 @@ public final class WirelessTransportManager {
      * call off the UI thread. Returns an honest user-facing verdict.
      */
     public static String pair(String host, int pairingPort, String pairingCode) {
+        return pair(host, pairingPort, pairingCode, 0);
+    }
+
+    /**
+     * Pair with an optional explicit Wireless Debugging ADB port (the
+     * `adb connect` endpoint shown on the device's Wireless debugging
+     * screen). The pairing protocol itself never reveals that port — its
+     * socket is a different, short-lived endpoint — so when {@code adbPort}
+     * is not given, the Settings Connect flow resolves it later from an
+     * earlier successful connect or via mDNS (see connectToLastPaired).
+     */
+    public static String pair(String host, int pairingPort, String pairingCode,
+                              int adbPort) {
         Context app = sAppContext;
         if (app == null) return "error: bridge not started";
         String code = pairingCode == null ? "" : pairingCode.trim();
         if (!code.matches("\\d{6}")) {
             return "error: pairing code must be exactly 6 digits";
         }
+        final int knownAdbPort = (adbPort > 0 && adbPort <= 65535) ? adbPort : 0;
         try {
             AdbKeyPair adbPair = AdbKeyStore.get(app);
             String keyLine = adbPair.getAndroidPubkeyLine("termbox");
@@ -86,9 +100,10 @@ public final class WirelessTransportManager {
                 code.getBytes(java.nio.charset.StandardCharsets.US_ASCII),
                 () -> cert, () -> key, keyLine, 10_000);
 
-            WirelessDeviceStore.get(app).put(result.deviceGuid, host, 0,
+            WirelessDeviceStore.get(app).put(result.deviceGuid, host, knownAdbPort,
                 "paired");
             TermboxAdbBridge.logInfo(LOG_TAG, "paired with " + host + ":" + pairingPort
+                + (knownAdbPort > 0 ? " (adb port " + knownAdbPort + ")" : "")
                 + " [guid=" + result.deviceGuid + "]");
             return "Successfully paired to " + host + ":" + pairingPort
                 + " [guid=" + result.deviceGuid + "]";
@@ -131,6 +146,45 @@ public final class WirelessTransportManager {
             return connect(host, port);
         }
         return null;
+    }
+
+    /**
+     * Settings "Connect": reach the most recently paired device's Wireless
+     * Debugging ADB port. The pairing handshake does not reveal that port
+     * (the pairing socket is a separate, short-lived endpoint), so the port
+     * is taken — in order — from an explicit {@code adbPort}, the last
+     * successful connect stored with the pairing, or (when {@code adbPort}
+     * is null) a bounded mDNS sweep of _adb-tls-connect._tcp. Passing
+     * {@code adbPort == 0} skips the mDNS sweep (tests, plumbing). Every
+     * outcome is an honest verdict; an unknown port is reported, never
+     * guessed.
+     */
+    public static String connectToLastPaired(Context context, Integer adbPort) {
+        Context app = context != null ? context.getApplicationContext() : sAppContext;
+        if (app == null) return "error: bridge not started";
+        java.util.List<WirelessDeviceStore.PairedDevice> all =
+            WirelessDeviceStore.get(app).all();
+        if (all.isEmpty()) return "error: no paired device";
+        WirelessDeviceStore.PairedDevice target = all.get(all.size() - 1);
+
+        if (adbPort != null && adbPort > 0) {
+            return connect(target.host, adbPort);
+        }
+        if (target.lastAdbPort > 0) {
+            return connect(target.host, target.lastAdbPort);
+        }
+        if (adbPort != null) {
+            return unknownAdbPortVerdict(target.host);
+        }
+        Integer resolved = WirelessDiscovery.findConnectPort(app, target.host);
+        if (resolved == null) return unknownAdbPortVerdict(target.host);
+        return connect(target.host, resolved);
+    }
+
+    private static String unknownAdbPortVerdict(String host) {
+        return "cannot connect to " + host
+            + ": Wireless Debugging ADB port unknown — check Wireless debugging on"
+            + " the device, use Discover, or pair again with the ADB port filled in";
     }
 
     // ---------- secure connect ----------

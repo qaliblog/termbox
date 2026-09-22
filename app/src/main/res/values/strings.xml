@@ -199,6 +199,8 @@
             <string name="adb_wireless_forget_summary">Remove saved Wireless Debugging pairing records</string>
             <string name="adb_wireless_ip">IP / Host</string>
             <string name="adb_wireless_pairing_port">Pairing port</string>
+            <string name="adb_wireless_adb_port">ADB port (optional — from “Wireless debugging”)</string>
+            <string name="adb_wireless_port_unknown">ADB port unknown — use Discover or pair again with the ADB port filled in</string>
             <string name="adb_wireless_pairing_code">Pairing code (6 digits)</string>
             <string name="adb_wireless_pair_button">Pair</string>
             <string name="adb_wireless_cancel_button">Cancel</string>

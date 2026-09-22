@@ -56,6 +56,22 @@ public final class WirelessDiscovery {
     }
 
     /**
+     * Resolve the Wireless Debugging ADB port of {@code host} via a bounded
+     * mDNS sweep of _adb-tls-connect._tcp (adbd advertises it whenever
+     * Wireless debugging is enabled — daemon/mdns.cpp). The pairing service
+     * is deliberately not consulted: it only lives while the device's
+     * pairing dialog is open and carries the pairing port, never the ADB
+     * port. Returns the first connect port advertised by that host, or null
+     * when nothing was found (the caller reports that honestly).
+     */
+    public static Integer findConnectPort(Context context, String host) {
+        for (DiscoveredService s : discover(context)) {
+            if (!s.isPairing() && host.equals(s.host)) return s.port;
+        }
+        return null;
+    }
+
+    /**
      * Sweep for Wireless Debugging services. Blocking up to
      * {@code SWEEP_SECONDS} + resolution time; call off the UI thread.
      * Returns everything found in the window (possibly empty — e.g. when
@@ -107,10 +123,12 @@ public final class WirelessDiscovery {
 
                         @Override
                         public void onServiceResolved(NsdServiceInfo info) {
+                            String address = null;
+                            if (info.getHost() != null) {
+                                address = info.getHost().getHostAddress();
+                            }
                             found.add(new DiscoveredService(type,
-                                info.getServiceName(),
-                                info.getHost() != null ? info.getHost().getHostAddress() : null,
-                                info.getPort()));
+                                info.getServiceName(), address, info.getPort()));
                         }
                     });
                 }

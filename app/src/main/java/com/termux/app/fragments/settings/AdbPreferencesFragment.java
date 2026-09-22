@@ -130,15 +130,8 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
         Preference wirelessConnect = findPreference(KEY_W_CONNECT);
         if (wirelessConnect != null) {
             wirelessConnect.setOnPreferenceClickListener(preference -> {
-                runAsync(() -> {
-                    com.termux.app.adb.wireless.WirelessDeviceStore.PairedDevice target =
-                        lastPairedDevice(context);
-                    if (target == null || target.lastAdbPort <= 0) {
-                        return context.getString(R.string.adb_wireless_not_paired);
-                    }
-                    return com.termux.app.adb.wireless.WirelessTransportManager
-                        .connect(target.host, target.lastAdbPort);
-                });
+                runAsync(() -> com.termux.app.adb.wireless.WirelessTransportManager
+                    .connectToLastPaired(context, null));
                 return true;
             });
         }
@@ -193,9 +186,11 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
     }
 
     /**
-     * Pairing dialog: IP, pairing port, 6-digit code. The code lives only in
-     * the dialog's EditText and is handed straight to the transport manager
-     * on a worker thread; neither the dialog nor the manager logs it.
+     * Pairing dialog: IP, pairing port, 6-digit code, and an optional ADB
+     * port (the Wireless debugging IPv4/port shown on the device — taking
+     * it here saves a separate Connect step). The code lives only in the
+     * dialog's EditText and is handed straight to the transport manager on
+     * a worker thread; neither the dialog nor the manager logs it.
      */
     private void showPairingDialog() {
         final Context context = getContext();
@@ -224,6 +219,12 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
         codeEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
         container.addView(codeEdit);
 
+        final EditText adbPortEdit = new EditText(context);
+        adbPortEdit.setHint(R.string.adb_wireless_adb_port);
+        adbPortEdit.setSingleLine(true);
+        adbPortEdit.setInputType(InputType.TYPE_CLASS_NUMBER);
+        container.addView(adbPortEdit);
+
         new AlertDialog.Builder(context)
             .setTitle(R.string.adb_wireless_pair_title)
             .setView(container)
@@ -231,16 +232,23 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
                 String host = ipEdit.getText().toString().trim();
                 String portText = portEdit.getText().toString().trim();
                 String code = codeEdit.getText().toString().trim();
+                String adbPortText = adbPortEdit.getText().toString().trim();
                 int port = -1;
+                int adbPort = 0;
                 try {
                     port = Integer.parseInt(portText);
+                } catch (NumberFormatException ignored) {
+                }
+                try {
+                    adbPort = Integer.parseInt(adbPortText);
                 } catch (NumberFormatException ignored) {
                 }
                 final String fHost = host;
                 final int fPort = port;
                 final String fCode = code;
+                final int fAdbPort = adbPort;
                 runAsync(() -> com.termux.app.adb.wireless.WirelessTransportManager
-                    .pair(fHost, fPort, fCode));
+                    .pair(fHost, fPort, fCode, fAdbPort));
             })
             .setNegativeButton(R.string.adb_wireless_cancel_button, null)
             .show();
@@ -325,7 +333,10 @@ public class AdbPreferencesFragment extends PreferenceFragmentCompat {
                 com.termux.app.adb.wireless.WirelessDeviceStore.PairedDevice last =
                     lastPairedDevice(context);
                 if (last != null) {
-                    summary += "\n" + last.endpoint();
+                    summary += last.lastAdbPort > 0
+                        ? "\n" + last.endpoint()
+                        : "\n" + last.host + " — "
+                            + context.getString(R.string.adb_wireless_port_unknown);
                 }
             }
             wirelessStatus.setSummary(summary);

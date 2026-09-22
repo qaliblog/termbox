@@ -549,9 +549,13 @@ Known limitations (honest):
 - Pairing requires the user to read the 6-digit code from the device's
   "Pair device with pairing code" dialog; TermBox cannot enable Wireless
   Debugging or open that dialog itself (no public API).
-- Wireless Debugging ports change across toggles/reboots; after a reboot the
-  reconnect loop needs the device to re-announce or the user to reconnect
-  with the new port (mDNS discovery in Settings helps find it).
+- The pairing exchange never reveals the Wireless Debugging ADB port (the
+  pairing socket is a separate, short-lived endpoint), so a fresh pairing is
+  stored without one. The Settings Connect flow resolves the port in order
+  from the pairing dialog's optional ADB-port field, the last successful
+  connect stored with the pairing, or a bounded mDNS sweep of
+  _adb-tls-connect._tcp — and reports "port unknown" honestly when all
+  three fail, never guessing.
 - SPAKE2 here is not constant-time (BigInteger math). Acceptable: the secret
   is a short-lived pairing code plus fresh TLS-exported material, and the
   code is single-use.

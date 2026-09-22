@@ -174,6 +174,47 @@ public class WirelessDebuggingTest {
     }
 
     @Test
+    public void pairWithAdbPortThenSettingsConnectWorksEndToEnd() throws Exception {
+        mPairServer = new FakePairingServer();
+        mAdbd = new FakeSecureAdbd();
+
+        // Settings flow: pair with the optional ADB port filled in, then
+        // "Connect" (connectToLastPaired) with no explicit port.
+        String pairMsg = WirelessTransportManager.pair("127.0.0.1",
+            mPairServer.port, CODE, mAdbd.port);
+        assertTrue("pairing must succeed, got: " + pairMsg,
+            pairMsg.startsWith("Successfully paired"));
+
+        String connectMsg = WirelessTransportManager.connectToLastPaired(
+            mContext, null);
+        assertTrue("Settings Connect must reach the device, got: " + connectMsg
+            + " | adbd-side: " + mAdbd.failureDetail(),
+            connectMsg.startsWith("connected to"));
+        assertNotNull(WirelessTransportManager.bySpec(
+            "127.0.0.1:" + mAdbd.port));
+    }
+
+    @Test
+    public void connectToLastPairedWithoutPortReportsHonestFailure() {
+        mPairServer = new FakePairingServer();
+        // Pair with no ADB port recorded (the realistic fresh-pairing state).
+        assertTrue(WirelessTransportManager.pair("127.0.0.1",
+            mPairServer.port, CODE).startsWith("Successfully paired"));
+        // adbPort == 0 skips the mDNS sweep (none in JVM tests): the verdict
+        // must honestly say the port is unknown, not silently do nothing.
+        String msg = WirelessTransportManager.connectToLastPaired(mContext, 0);
+        assertTrue("must report the unknown-port verdict, got: " + msg,
+            msg.startsWith("cannot connect to"));
+        assertTrue(msg.contains("port unknown"));
+    }
+
+    @Test
+    public void connectToLastPairedWithoutAnyPairingFailsCleanly() {
+        String msg = WirelessTransportManager.connectToLastPaired(mContext, null);
+        assertEquals("error: no paired device", msg);
+    }
+
+    @Test
     public void connectToUnknownHostReportsHonestFailure() throws Exception {
         String msg = WirelessTransportManager.connect("127.0.0.1", 1); // closed port
         assertTrue("must be an honest failure, got: " + msg,

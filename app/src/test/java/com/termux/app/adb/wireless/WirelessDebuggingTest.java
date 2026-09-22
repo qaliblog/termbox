@@ -195,7 +195,7 @@ public class WirelessDebuggingTest {
     }
 
     @Test
-    public void connectToLastPairedWithoutPortReportsHonestFailure() {
+    public void connectToLastPairedWithoutPortReportsHonestFailure() throws Exception {
         mPairServer = new FakePairingServer();
         // Pair with no ADB port recorded (the realistic fresh-pairing state).
         assertTrue(WirelessTransportManager.pair("127.0.0.1",
